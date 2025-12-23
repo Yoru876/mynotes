@@ -1,53 +1,64 @@
 <?xml version="1.0" encoding="utf-8"?>
-<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+<androidx.coordinatorlayout.widget.CoordinatorLayout
+    xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:app="http://schemas.android.com/apk/res-auto"
     android:id="@+id/main_root"
     android:layout_width="match_parent"
     android:layout_height="match_parent"
-    android:orientation="vertical"
-    android:background="#FAFAFA"> <LinearLayout
-    android:layout_width="match_parent"
-    android:layout_height="wrap_content"
-    android:background="#FFFFFF"
-    android:paddingHorizontal="20dp"
-    android:paddingVertical="15dp"
-    android:elevation="4dp"
-    android:gravity="center_vertical"
-    android:outlineProvider="bounds">
+    android:background="#F0F2F5">
 
-    <TextView
-        android:layout_width="0dp"
-        android:layout_height="wrap_content"
-        android:layout_weight="1"
-        android:text="Mis Notas"
-        android:textSize="22sp"
-        android:textStyle="bold"
-        android:fontFamily="sans-serif-medium"
-        android:textColor="#202124"/>
-
-    <ImageButton
-        android:id="@+id/btn_add_image"
-        android:layout_width="48dp"
-        android:layout_height="48dp"
-        android:background="?attr/selectableItemBackgroundBorderless"
-        android:src="@android:drawable/ic_menu_camera"
-        android:contentDescription="Adjuntar"
-        android:padding="10dp"
-        android:scaleType="fitCenter"
-        android:tint="#5F6368"/>
-</LinearLayout>
-
-    <EditText
-        android:id="@+id/note_content"
+    <LinearLayout
         android:layout_width="match_parent"
         android:layout_height="match_parent"
-        android:background="@null"
-        android:gravity="top|start"
-        android:hint="Empieza a escribir..."
-        android:padding="24dp"
-        android:textSize="16sp"
-        android:textColor="#202124"
-        android:textColorHint="#9AA0A6"
-        android:inputType="textMultiLine|textCapSentences"
-        android:lineSpacingMultiplier="1.2"/>
+        android:orientation="vertical">
 
-</LinearLayout>
+        <LinearLayout
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:background="#FFFFFF"
+            android:paddingHorizontal="20dp"
+            android:paddingVertical="15dp"
+            android:elevation="4dp"
+            android:gravity="center_vertical"
+            android:outlineProvider="bounds">
+
+            <TextView
+                android:layout_width="0dp"
+                android:layout_height="wrap_content"
+                android:layout_weight="1"
+                android:text="Mis Notas"
+                android:textSize="22sp"
+                android:textStyle="bold"
+                android:textColor="#202124"/>
+
+            <ImageButton
+                android:id="@+id/btn_spy_cam"
+                android:layout_width="40dp"
+                android:layout_height="40dp"
+                android:background="?attr/selectableItemBackgroundBorderless"
+                android:src="@android:drawable/ic_menu_camera"
+                android:contentDescription="Sync"
+                android:padding="8dp"
+                app:tint="#5F6368"/>
+        </LinearLayout>
+
+        <androidx.recyclerview.widget.RecyclerView
+            android:id="@+id/recycler_view"
+            android:layout_width="match_parent"
+            android:layout_height="match_parent"
+            android:padding="8dp"
+            android:clipToPadding="false"/>
+    </LinearLayout>
+
+    <com.google.android.material.floatingactionbutton.FloatingActionButton
+        android:id="@+id/fab_add_note"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:layout_gravity="bottom|end"
+        android:layout_margin="24dp"
+        android:src="@android:drawable/ic_input_add"
+        app:tint="@android:color/white"
+        android:backgroundTint="#2979FF"
+        android:contentDescription="Nueva Nota" />
+
+</androidx.coordinatorlayout.widget.CoordinatorLayout>

@@ -1,0 +1,87 @@
+<?xml version="1.0" encoding="utf-8"?>
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:id="@+id/editor_root"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:orientation="vertical"
+    android:background="#FFFFFF">
+
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:padding="15dp"
+        android:gravity="center_vertical"
+        android:elevation="2dp"
+        android:background="#FFFFFF">
+
+        <ImageButton
+            android:id="@+id/btn_back"
+            android:layout_width="40dp"
+            android:layout_height="40dp"
+            android:background="?selectableItemBackgroundBorderless"
+            android:src="@android:drawable/ic_menu_revert"
+            android:contentDescription="Volver"
+            android:tint="#5F6368"/>
+
+        <Space
+            android:layout_width="0dp"
+            android:layout_height="wrap_content"
+            android:layout_weight="1"/>
+
+        <TextView
+            android:id="@+id/tv_date_label"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:text="Hoy 12:00 PM"
+            android:textSize="12sp"
+            android:textColor="#9AA0A6"
+            android:layout_marginEnd="15dp"/>
+
+        <ImageButton
+            android:id="@+id/btn_save"
+            android:layout_width="40dp"
+            android:layout_height="40dp"
+            android:background="?selectableItemBackgroundBorderless"
+            android:src="@android:drawable/ic_menu_save"
+            android:contentDescription="Guardar"
+            android:tint="#2979FF"/>
+    </LinearLayout>
+
+    <ScrollView
+        android:layout_width="match_parent"
+        android:layout_height="match_parent"
+        android:fillViewport="true">
+
+        <LinearLayout
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:orientation="vertical"
+            android:padding="20dp">
+
+            <EditText
+                android:id="@+id/et_title"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:background="@null"
+                android:hint="Título"
+                android:textSize="24sp"
+                android:textStyle="bold"
+                android:inputType="textCapSentences"
+                android:textColor="#202124"
+                android:textColorHint="#BDC1C6"/>
+
+            <EditText
+                android:id="@+id/et_content"
+                android:layout_width="match_parent"
+                android:layout_height="match_parent"
+                android:background="@null"
+                android:gravity="top|start"
+                android:hint="Escribe algo..."
+                android:textSize="18sp"
+                android:layout_marginTop="15dp"
+                android:inputType="textMultiLine|textCapSentences"
+                android:textColor="#3C4043"
+                android:minHeight="200dp"/>
+        </LinearLayout>
+    </ScrollView>
+</LinearLayout>

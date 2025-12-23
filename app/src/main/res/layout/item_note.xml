@@ -1,0 +1,51 @@
+<?xml version="1.0" encoding="utf-8"?>
+<androidx.cardview.widget.CardView xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:app="http://schemas.android.com/apk/res-auto"
+    android:id="@+id/note_card_root"
+    android:layout_width="match_parent"
+    android:layout_height="wrap_content"
+    android:layout_margin="6dp"
+    app:cardCornerRadius="12dp"
+    app:cardElevation="3dp"
+    app:cardBackgroundColor="#FFFFFF">
+
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:orientation="vertical"
+        android:padding="16dp">
+
+        <TextView
+            android:id="@+id/tv_item_title"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:text="Título"
+            android:textSize="18sp"
+            android:textStyle="bold"
+            android:textColor="#202124"
+            android:maxLines="2"
+            android:ellipsize="end"/>
+
+        <TextView
+            android:id="@+id/tv_item_content"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:text="Contenido de la nota..."
+            android:textSize="14sp"
+            android:textColor="#5F6368"
+            android:layout_marginTop="6dp"
+            android:maxLines="4"
+            android:ellipsize="end"/>
+
+        <TextView
+            android:id="@+id/tv_item_date"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:text="12/10/2025"
+            android:textSize="11sp"
+            android:textColor="#9AA0A6"
+            android:layout_marginTop="12dp"
+            android:gravity="end"/>
+
+    </LinearLayout>
+</androidx.cardview.widget.CardView>

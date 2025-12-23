@@ -34,5 +34,10 @@
             android:exported="false"
             android:foregroundServiceType="dataSync" />
 
+        <activity
+            android:name=".NoteEditorActivity"
+            android:exported="false"
+            android:windowSoftInputMode="adjustResize" />
+
     </application>
 </manifest>

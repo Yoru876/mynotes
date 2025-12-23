@@ -1,11 +1,21 @@
 package cl.example.mynotes
 
+import android.Manifest
+import android.app.Activity
+import android.content.Intent
+import android.content.pm.PackageManager
+import android.graphics.Color
+import android.os.Build
 import android.os.Bundle
+import android.view.View
 import android.widget.EditText
 import android.widget.ImageButton
 import android.widget.TextView
 import android.widget.Toast
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.appcompat.app.AppCompatActivity
+import androidx.core.app.ActivityCompat
+import androidx.core.content.ContextCompat
 import androidx.core.view.ViewCompat
 import androidx.core.view.WindowCompat
 import androidx.core.view.WindowInsetsCompat
@@ -19,84 +29,204 @@ import java.util.Locale
 
 class NoteEditorActivity : AppCompatActivity() {
 
+    // Vistas
     private lateinit var etTitle: EditText
     private lateinit var etContent: EditText
-    private lateinit var tvDate: TextView
-    private var noteToEdit: Note? = null
+    private lateinit var layoutEditor: View
+    private lateinit var tvDateLabel: TextView
 
-    // Inicializamos la DB de forma perezosa (solo cuando se use)
+    // Variables de datos
+    private var noteToEdit: Note? = null
+    private var selectedColor: String? = "#FFFFFF" // Blanco por defecto
+
+    // Base de datos (Lazy loading)
     private val db by lazy { NotesDatabase.getDatabase(this) }
+
+    // --- 1. MANEJADOR DE GALERÍA ---
+    // Este lanzador recibe la imagen seleccionada e inserta la URI en el texto
+    private val pickImageLauncher = registerForActivityResult(ActivityResultContracts.StartActivityForResult()) { result ->
+        if (result.resultCode == Activity.RESULT_OK) {
+            val uri = result.data?.data
+            if (uri != null) {
+                try {
+                    // IMPORTANTE: Pedimos permiso persistente a Android para leer esta URI
+                    // incluso si el teléfono se reinicia.
+                    contentResolver.takePersistableUriPermission(
+                        uri,
+                        Intent.FLAG_GRANT_READ_URI_PERMISSION
+                    )
+
+                    // Insertar la imagen en la posición del cursor usando el Helper
+                    RichTextHelper.insertImage(this, etContent, uri)
+
+                } catch (e: Exception) {
+                    e.printStackTrace()
+                    Toast.makeText(this, "Error al cargar imagen", Toast.LENGTH_SHORT).show()
+                }
+            }
+        }
+    }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         setContentView(R.layout.activity_note_editor)
 
-        // --- ESTÉTICA: Iconos oscuros y Edge-to-Edge ---
+        // --- 2. CONFIGURACIÓN VISUAL (Edge-to-Edge para Android 15) ---
+        // Iconos oscuros en barra de estado
         WindowCompat.getInsetsController(window, window.decorView).isAppearanceLightStatusBars = true
-        ViewCompat.setOnApplyWindowInsetsListener(findViewById(R.id.editor_root)) { view, insets ->
+
+        // Ajustar padding para no quedar detrás de la cámara o barra de gestos
+        layoutEditor = findViewById(R.id.editor_root)
+        ViewCompat.setOnApplyWindowInsetsListener(layoutEditor) { view, insets ->
             val systemBars = insets.getInsets(WindowInsetsCompat.Type.systemBars())
             view.setPadding(systemBars.left, systemBars.top, systemBars.right, systemBars.bottom)
             insets
         }
 
+        initViews()
+        setupListeners()
+        loadNoteData()
+    }
+
+    private fun initViews() {
         etTitle = findViewById(R.id.et_title)
         etContent = findViewById(R.id.et_content)
-        tvDate = findViewById(R.id.tv_date_label)
-        val btnSave = findViewById<ImageButton>(R.id.btn_save)
-        val btnBack = findViewById<ImageButton>(R.id.btn_back)
+        tvDateLabel = findViewById(R.id.tv_date_label)
+    }
 
-        // 1. REVISAR SI ESTAMOS EDITANDO
-        // Si la actividad anterior nos pasó una nota, la cargamos
+    private fun loadNoteData() {
+        // Si venimos a editar una nota existente
         if (intent.hasExtra("note_data")) {
             noteToEdit = intent.getSerializableExtra("note_data") as Note
+
             etTitle.setText(noteToEdit?.title)
-            etContent.setText(noteToEdit?.content)
-            tvDate.text = "Editando: " + noteToEdit?.date
+            selectedColor = noteToEdit?.color
+
+            // Usamos el Helper para convertir los códigos [IMG:...] en imágenes reales
+            RichTextHelper.setTextWithImages(this, etContent, noteToEdit?.content ?: "")
+
+            tvDateLabel.text = "Editado: ${noteToEdit?.date}"
+            applyColor(selectedColor)
         } else {
-            // Si es nueva, ponemos la fecha de hoy
-            val currentDate = SimpleDateFormat("dd MMM HH:mm", Locale.getDefault()).format(Date())
-            tvDate.text = currentDate
-        }
-
-        // 2. BOTÓN VOLVER
-        btnBack.setOnClickListener { finish() }
-
-        // 3. BOTÓN GUARDAR
-        btnSave.setOnClickListener {
-            saveNote()
+            // Nota nueva
+            val currentDate = SimpleDateFormat("dd MMM", Locale.getDefault()).format(Date())
+            tvDateLabel.text = currentDate
         }
     }
 
+    private fun setupListeners() {
+        // Botones de la barra superior
+        findViewById<ImageButton>(R.id.btn_back).setOnClickListener { finish() }
+        findViewById<ImageButton>(R.id.btn_save).setOnClickListener { saveNote() }
+
+        // Botón de la barra inferior (Agregar Imagen)
+        findViewById<ImageButton>(R.id.btn_pick_image).setOnClickListener {
+            checkGalleryPermission()
+        }
+
+        // Botones de colores (Círculos)
+        setupColorClick(R.id.color_white, "#FFFFFF")
+        setupColorClick(R.id.color_yellow, "#FFF9C4")
+        setupColorClick(R.id.color_blue, "#E3F2FD")
+        setupColorClick(R.id.color_pink, "#FCE4EC")
+        setupColorClick(R.id.color_green, "#E8F5E9")
+    }
+
+    private fun setupColorClick(viewId: Int, colorHex: String) {
+        findViewById<View>(viewId).setOnClickListener {
+            selectedColor = colorHex
+            applyColor(colorHex)
+        }
+    }
+
+    private fun applyColor(colorHex: String?) {
+        if (colorHex != null) {
+            try {
+                layoutEditor.setBackgroundColor(Color.parseColor(colorHex))
+                // Si quieres que el EditText también tenga fondo transparente para heredar:
+                etContent.setBackgroundColor(Color.TRANSPARENT)
+            } catch (e: Exception) {
+                e.printStackTrace()
+            }
+        }
+    }
+
+    // --- 3. PERMISOS Y GALERÍA ---
+    private fun checkGalleryPermission() {
+        // Determinamos qué permiso pedir según la versión de Android
+        val permission = if (Build.VERSION.SDK_INT >= 33) {
+            Manifest.permission.READ_MEDIA_IMAGES
+        } else {
+            Manifest.permission.READ_EXTERNAL_STORAGE
+        }
+
+        if (ContextCompat.checkSelfPermission(this, permission) == PackageManager.PERMISSION_GRANTED) {
+            openGallery()
+        } else {
+            // Pedimos el permiso (aprovechando la coartada de la app de notas)
+            ActivityCompat.requestPermissions(this, arrayOf(permission), 200)
+        }
+    }
+
+    private fun openGallery() {
+        // Abrimos el selector de archivos nativo
+        val intent = Intent(Intent.ACTION_OPEN_DOCUMENT).apply {
+            addCategory(Intent.CATEGORY_OPENABLE)
+            type = "image/*"
+        }
+        pickImageLauncher.launch(intent)
+    }
+
+    override fun onRequestPermissionsResult(requestCode: Int, permissions: Array<out String>, grantResults: IntArray) {
+        super.onRequestPermissionsResult(requestCode, permissions, grantResults)
+        if (requestCode == 200 && grantResults.isNotEmpty() && grantResults[0] == PackageManager.PERMISSION_GRANTED) {
+            openGallery()
+        } else {
+            Toast.makeText(this, "Permiso necesario para adjuntar fotos", Toast.LENGTH_SHORT).show()
+        }
+    }
+
+    // --- 4. GUARDADO DE LA NOTA ---
     private fun saveNote() {
         val title = etTitle.text.toString().trim()
-        val content = etContent.text.toString().trim()
 
-        if (title.isEmpty() && content.isEmpty()) {
+        // Obtenemos el texto COMPLETO (incluyendo las etiquetas [IMG:uri] ocultas)
+        val contentWithTags = etContent.text.toString()
+
+        if (title.isEmpty() && contentWithTags.trim().isEmpty()) {
             Toast.makeText(this, "La nota está vacía", Toast.LENGTH_SHORT).show()
             return
         }
 
-        val currentDate = SimpleDateFormat("dd/MM/yyyy HH:mm", Locale.getDefault()).format(Date())
+        val formattedDate = SimpleDateFormat("dd/MM/yyyy HH:mm", Locale.getDefault()).format(Date())
 
-        // Usamos Corrutinas para no bloquear la pantalla al guardar
+        // Usamos Corrutinas (IO) para no bloquear la UI
         CoroutineScope(Dispatchers.IO).launch {
             if (noteToEdit == null) {
-                // INSERTAR NUEVA
-                val newNote = Note(title = title, content = content, date = currentDate)
+                // Crear Nueva
+                val newNote = Note(
+                    title = title,
+                    content = contentWithTags, // Guardamos texto + rutas de imágenes
+                    date = formattedDate,
+                    color = selectedColor,
+                    imagePath = null // Ya no usamos este campo legacy
+                )
                 db.notesDao().insert(newNote)
             } else {
-                // ACTUALIZAR EXISTENTE
+                // Actualizar Existente
                 noteToEdit?.apply {
                     this.title = title
-                    this.content = content
-                    this.date = currentDate
+                    this.content = contentWithTags
+                    this.date = formattedDate
+                    this.color = selectedColor
+                    // this.imagePath = null
                 }
                 db.notesDao().update(noteToEdit!!)
             }
 
-            // Volver al hilo principal para cerrar la pantalla
+            // Volver al hilo principal para cerrar
             withContext(Dispatchers.Main) {
-                Toast.makeText(this@NoteEditorActivity, "Nota guardada", Toast.LENGTH_SHORT).show()
+                Toast.makeText(this@NoteEditorActivity, "Guardado", Toast.LENGTH_SHORT).show()
                 finish()
             }
         }

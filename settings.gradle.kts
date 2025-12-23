@@ -16,9 +16,12 @@ dependencyResolutionManagement {
     repositories {
         google()
         mavenCentral()
+
+        // --- AGREGA ESTO PARA QUE FUNCIONE UCROP ---
+        maven { url = uri("https://jitpack.io") }
+        // -------------------------------------------
     }
 }
 
 rootProject.name = "MyNotes"
 include(":app")
- 

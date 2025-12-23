@@ -34,18 +34,27 @@ class NotesAdapter(private val onNoteClicked: (Note) -> Unit) :
         fun bind(note: Note, clickListener: (Note) -> Unit) {
             titleTv.text = note.title
 
-            // LIMPIEZA: Convertimos "[IMG:...]" en un emoji de cámara para la vista previa
+            // Limpieza de etiquetas de imagen para la vista previa
             contentTv.text = RichTextHelper.stripTags(note.content)
 
             dateTv.text = note.date
 
-            if (note.color != null) {
-                card.setCardBackgroundColor(Color.parseColor(note.color))
+            // --- CORRECCIÓN AQUÍ ---
+            // Verificamos que no sea nulo Y TAMPOCO esté vacío
+            if (!note.color.isNullOrEmpty()) {
+                try {
+                    card.setCardBackgroundColor(Color.parseColor(note.color))
+                } catch (e: Exception) {
+                    // Si el color es un código inválido (ej: "texto"), ponemos blanco para no crashear
+                    card.setCardBackgroundColor(Color.WHITE)
+                }
             } else {
+                // Si es nulo o vacío (""), ponemos blanco
                 card.setCardBackgroundColor(Color.WHITE)
             }
+            // -----------------------
 
-            // Ocultamos la imagen de cabecera antigua, ya que ahora las imagenes están dentro del texto
+            // Ocultamos la imagen de cabecera antigua
             imageView.visibility = View.GONE
 
             card.setOnClickListener { clickListener(note) }

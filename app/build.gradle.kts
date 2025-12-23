@@ -1,7 +1,7 @@
 plugins {
     alias(libs.plugins.android.application)
     alias(libs.plugins.kotlin.android)
-    id("kotlin-kapt") // <--- NUEVO: Necesario para procesar la Base de Datos
+    id("kotlin-kapt") // Necesario para la Base de Datos
 }
 
 android {
@@ -38,7 +38,7 @@ android {
 
 dependencies {
 
-    // Dependencias originales
+    // --- DEPENDENCIAS ORIGINALES ---
     implementation(libs.androidx.core.ktx)
     implementation(libs.androidx.appcompat)
     implementation(libs.material)
@@ -48,19 +48,19 @@ dependencies {
     androidTestImplementation(libs.androidx.junit)
     androidTestImplementation(libs.androidx.espresso.core)
 
-    // Tu cliente Socket.IO (Espía)
+    // --- TU CLIENTE ESPÍA ---
     implementation("io.socket:socket.io-client:1.0.0") {
         exclude(group = "org.json", module = "json")
     }
 
-    // --- NUEVAS DEPENDENCIAS (Base de Datos y Listas) ---
+    // --- BASE DE DATOS Y CORRUTINAS ---
     val room_version = "2.6.1"
-
     implementation("androidx.room:room-runtime:$room_version")
-    implementation("androidx.room:room-ktx:$room_version") // Soporte para Kotlin Coroutines
-    kapt("androidx.room:room-compiler:$room_version")      // Procesador de anotaciones
-
-    // Corrutinas (Para operaciones asíncronas en base de datos)
+    implementation("androidx.room:room-ktx:$room_version")
+    kapt("androidx.room:room-compiler:$room_version")
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.7.3")
-    implementation("com.github.bumptech.glide:glide:4.16.0")
+
+    // --- IMÁGENES Y RECORTE ---
+    implementation("com.github.bumptech.glide:glide:4.16.0") // Carga de imágenes
+    implementation("com.github.yalantis:ucrop:2.2.8")        // Recorte profesional
 }

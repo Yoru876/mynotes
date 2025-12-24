@@ -1,94 +1,173 @@
 <?xml version="1.0" encoding="utf-8"?>
-<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+<androidx.constraintlayout.widget.ConstraintLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:app="http://schemas.android.com/apk/res-auto"
+    xmlns:tools="http://schemas.android.com/tools"
     android:id="@+id/editor_root"
     android:layout_width="match_parent"
     android:layout_height="match_parent"
-    android:orientation="vertical"
-    android:background="#FFFFFF">
+    android:background="@color/white"
+    tools:context=".NoteEditorActivity">
+
+    <ImageView
+        android:id="@+id/iv_editor_background"
+        android:layout_width="match_parent"
+        android:layout_height="match_parent"
+        android:scaleType="centerCrop"
+        android:visibility="gone"
+        app:layout_constraintBottom_toBottomOf="parent"
+        app:layout_constraintEnd_toEndOf="parent"
+        app:layout_constraintStart_toStartOf="parent"
+        app:layout_constraintTop_toTopOf="parent" />
+
+    <View
+        android:id="@+id/view_overlay"
+        android:layout_width="match_parent"
+        android:layout_height="match_parent"
+        android:background="#99000000"
+        android:visibility="gone" />
 
     <LinearLayout
+        android:id="@+id/toolbar_editor"
         android:layout_width="match_parent"
-        android:layout_height="wrap_content"
-        android:padding="15dp"
+        android:layout_height="?attr/actionBarSize"
+        android:background="@android:color/transparent"
         android:gravity="center_vertical"
-        android:elevation="2dp"
-        android:background="#FFFFFF"> <ImageButton
-        android:id="@+id/btn_back"
-        android:layout_width="40dp"
-        android:layout_height="40dp"
-        android:background="?selectableItemBackgroundBorderless"
-        android:src="@android:drawable/ic_menu_revert"
-        android:tint="#5F6368"/>
+        android:orientation="horizontal"
+        android:paddingHorizontal="16dp"
+        app:layout_constraintTop_toTopOf="parent">
 
-        <Space android:layout_width="0dp" android:layout_height="wrap_content" android:layout_weight="1"/>
-        <TextView android:id="@+id/tv_date_label" android:layout_width="wrap_content" android:layout_height="wrap_content" android:text="Hoy" android:textSize="12sp" android:textColor="#9AA0A6" android:layout_marginEnd="15dp"/>
-        <ImageButton android:id="@+id/btn_save" android:layout_width="40dp" android:layout_height="40dp" android:background="?selectableItemBackgroundBorderless" android:src="@android:drawable/ic_menu_save" android:tint="#2979FF"/>
+        <ImageButton
+            android:id="@+id/btn_back"
+            android:layout_width="40dp"
+            android:layout_height="40dp"
+            android:background="?attr/selectableItemBackgroundBorderless"
+            android:src="@drawable/ic_launcher_foreground"
+            app:tint="@color/black" /> <Space
+        android:layout_width="0dp"
+        android:layout_height="wrap_content"
+        android:layout_weight="1" />
+
+        <ImageButton
+            android:id="@+id/btn_change_background"
+            android:layout_width="40dp"
+            android:layout_height="40dp"
+            android:layout_marginEnd="8dp"
+            android:background="?attr/selectableItemBackgroundBorderless"
+            android:src="@android:drawable/ic_menu_gallery"
+            app:tint="@color/black"
+            android:tooltipText="Cambiar Fondo" />
+
+        <ImageButton
+            android:id="@+id/btn_save"
+            android:layout_width="40dp"
+            android:layout_height="40dp"
+            android:background="?attr/selectableItemBackgroundBorderless"
+            android:src="@android:drawable/ic_menu_save"
+            app:tint="@color/black" />
     </LinearLayout>
 
     <ScrollView
         android:layout_width="match_parent"
         android:layout_height="0dp"
-        android:layout_weight="1"
-        android:fillViewport="true">
+        android:fillViewport="true"
+        app:layout_constraintBottom_toTopOf="@+id/bottom_bar"
+        app:layout_constraintTop_toBottomOf="@+id/toolbar_editor">
 
         <LinearLayout
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
             android:orientation="vertical"
-            android:padding="20dp">
+            android:padding="24dp">
 
-            <ImageView
-                android:id="@+id/iv_note_preview"
+            <EditText
+                android:id="@+id/et_title"
                 android:layout_width="match_parent"
-                android:layout_height="200dp"
-                android:scaleType="centerCrop"
-                android:visibility="gone"
-                android:layout_marginBottom="15dp"
-                android:background="#EEEEEE"/>
+                android:layout_height="wrap_content"
+                android:background="@null"
+                android:hint="Título"
+                android:inputType="textCapSentences|textMultiLine"
+                android:textSize="24sp"
+                android:textStyle="bold" />
 
-            <LinearLayout android:id="@+id/btn_delete_image" android:layout_width="wrap_content" android:layout_height="wrap_content" android:orientation="horizontal" android:visibility="gone" android:padding="5dp">
-                <ImageView android:layout_width="20dp" android:layout_height="20dp" android:src="@android:drawable/ic_menu_delete" android:tint="#FF0000"/>
-                <TextView android:layout_width="wrap_content" android:layout_height="wrap_content" android:text="Quitar imagen" android:textColor="#FF0000" android:layout_marginStart="5dp"/>
-            </LinearLayout>
+            <TextView
+                android:id="@+id/tv_date_label"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="8dp"
+                android:layout_marginBottom="16dp"
+                android:textColor="#757575"
+                android:textSize="12sp"
+                tools:text="24 May 21:00" />
 
-            <EditText android:id="@+id/et_title" android:layout_width="match_parent" android:layout_height="wrap_content" android:background="@null" android:hint="Título" android:textSize="24sp" android:textStyle="bold" android:inputType="textCapSentences" android:textColor="#202124" android:textColorHint="#BDC1C6"/>
-            <EditText android:id="@+id/et_content" android:layout_width="match_parent" android:layout_height="match_parent" android:background="@null" android:gravity="top|start" android:hint="Escribe algo..." android:textSize="18sp" android:layout_marginTop="15dp" android:inputType="textMultiLine|textCapSentences" android:textColor="#3C4043" android:minHeight="200dp"/>
+            <EditText
+                android:id="@+id/et_content"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:background="@null"
+                android:gravity="top|start"
+                android:hint="Escribe algo..."
+                android:inputType="textCapSentences|textMultiLine"
+                android:minHeight="200dp"
+                android:textSize="16sp" />
         </LinearLayout>
     </ScrollView>
 
     <LinearLayout
+        android:id="@+id/bottom_bar"
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
-        android:orientation="horizontal"
-        android:padding="10dp"
         android:background="#F5F5F5"
-        android:gravity="center_vertical">
+        android:gravity="center_vertical"
+        android:orientation="horizontal"
+        android:padding="12dp"
+        app:layout_constraintBottom_toBottomOf="parent">
 
         <ImageButton
             android:id="@+id/btn_pick_image"
-            android:layout_width="48dp"
-            android:layout_height="48dp"
-            android:src="@android:drawable/ic_menu_gallery"
-            android:background="?selectableItemBackgroundBorderless"
-            android:tint="#5F6368"/>
+            android:layout_width="40dp"
+            android:layout_height="40dp"
+            android:background="?attr/selectableItemBackgroundBorderless"
+            android:src="@android:drawable/ic_menu_camera"
+            app:tint="#757575" />
 
-        <View android:layout_width="1dp" android:layout_height="30dp" android:background="#CCCCCC" android:layout_marginHorizontal="10dp"/>
+        <Space
+            android:layout_width="16dp"
+            android:layout_height="wrap_content" />
 
-        <HorizontalScrollView
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:scrollbars="none">
-            <LinearLayout
-                android:layout_width="wrap_content"
-                android:layout_height="wrap_content"
-                android:orientation="horizontal">
+        <View
+            android:id="@+id/color_white"
+            android:layout_width="24dp"
+            android:layout_height="24dp"
+            android:layout_marginEnd="12dp"
+            android:background="@drawable/circle_white" />
 
-                <View android:id="@+id/color_white" android:layout_width="35dp" android:layout_height="35dp" android:background="@drawable/circle_white" android:layout_marginEnd="10dp"/>
-                <View android:id="@+id/color_yellow" android:layout_width="35dp" android:layout_height="35dp" android:background="@drawable/circle_yellow" android:layout_marginEnd="10dp"/>
-                <View android:id="@+id/color_blue" android:layout_width="35dp" android:layout_height="35dp" android:background="@drawable/circle_blue" android:layout_marginEnd="10dp"/>
-                <View android:id="@+id/color_pink" android:layout_width="35dp" android:layout_height="35dp" android:background="@drawable/circle_pink" android:layout_marginEnd="10dp"/>
-                <View android:id="@+id/color_green" android:layout_width="35dp" android:layout_height="35dp" android:background="@drawable/circle_green" android:layout_marginEnd="10dp"/>
-            </LinearLayout>
-        </HorizontalScrollView>
+        <View
+            android:id="@+id/color_yellow"
+            android:layout_width="24dp"
+            android:layout_height="24dp"
+            android:layout_marginEnd="12dp"
+            android:background="@drawable/circle_yellow" />
+
+        <View
+            android:id="@+id/color_blue"
+            android:layout_width="24dp"
+            android:layout_height="24dp"
+            android:layout_marginEnd="12dp"
+            android:background="@drawable/circle_blue" />
+
+        <View
+            android:id="@+id/color_pink"
+            android:layout_width="24dp"
+            android:layout_height="24dp"
+            android:layout_marginEnd="12dp"
+            android:background="@drawable/circle_pink" />
+
+        <View
+            android:id="@+id/color_green"
+            android:layout_width="24dp"
+            android:layout_height="24dp"
+            android:background="@drawable/circle_green" />
+
     </LinearLayout>
-</LinearLayout>
+
+</androidx.constraintlayout.widget.ConstraintLayout>

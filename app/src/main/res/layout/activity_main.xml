@@ -45,18 +45,6 @@
                 app:titleTextColor="#202124"
                 app:menu="@menu/main_menu">
 
-                <ImageButton
-                    android:id="@+id/btn_spy_cam"
-                    android:layout_width="40dp"
-                    android:layout_height="40dp"
-                    android:layout_gravity="end"
-                    android:layout_marginEnd="10dp"
-                    android:background="?attr/selectableItemBackgroundBorderless"
-                    android:src="@android:drawable/ic_menu_camera"
-                    android:contentDescription="Sync"
-                    android:padding="8dp"
-                    app:tint="#5F6368"/>
-
             </com.google.android.material.appbar.MaterialToolbar>
         </com.google.android.material.appbar.AppBarLayout>
 

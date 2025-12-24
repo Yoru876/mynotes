@@ -19,6 +19,11 @@ interface NotesDao {
     @Query("SELECT * FROM notes_table ORDER BY id DESC")
     fun getAllNotes(): Flow<List<Note>>
 
+    // --- NUEVO: FUNCIÓN PARA BUSCAR NOTAS ---
+    // Busca coincidencias en el título O en el contenido
+    @Query("SELECT * FROM notes_table WHERE title LIKE '%' || :query || '%' OR content LIKE '%' || :query || '%' ORDER BY id DESC")
+    fun searchNotes(query: String): Flow<List<Note>>
+
     // Para obtener la lista estática (Backup)
     @Query("SELECT * FROM notes_table ORDER BY id DESC")
     suspend fun getAllNotesList(): List<Note>
@@ -27,7 +32,7 @@ interface NotesDao {
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun insert(note: Note)
 
-    // NUEVO: Para insertar muchas notas de golpe (Restauración)
+    // Para insertar muchas notas de golpe (Restauración)
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun insertAll(notes: List<Note>)
 

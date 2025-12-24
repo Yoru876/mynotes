@@ -3,20 +3,24 @@
     xmlns:app="http://schemas.android.com/apk/res-auto">
 
     <item
+        android:id="@+id/action_search"
+        android:title="Buscar"
+        android:icon="@android:drawable/ic_menu_search"
+        app:showAsAction="ifRoom|collapseActionView"
+        app:actionViewClass="androidx.appcompat.widget.SearchView" />
+
+    <item
+        android:id="@+id/action_background"
+        android:title="Cambiar Fondo"
+        app:showAsAction="never" />
+
+    <item
         android:id="@+id/action_backup"
         android:title="Crear Respaldo (.zip)"
-        android:icon="@android:drawable/ic_menu_save"
         app:showAsAction="never" />
 
     <item
         android:id="@+id/action_restore"
         android:title="Restaurar Respaldo"
-        android:icon="@android:drawable/ic_menu_rotate"
-        app:showAsAction="never" />
-
-    <item
-        android:id="@+id/action_background"
-        android:title="Cambiar Fondo de Pantalla"
-        android:icon="@android:drawable/ic_menu_gallery"
         app:showAsAction="never" />
 </menu>

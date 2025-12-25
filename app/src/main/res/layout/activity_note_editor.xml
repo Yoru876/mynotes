@@ -19,7 +19,6 @@
         app:layout_constraintStart_toStartOf="parent"
         app:layout_constraintTop_toTopOf="parent" />
 
-    <!-- Reduciendo opacidad del overlay -->
     <View
         android:id="@+id/view_overlay"
         android:layout_width="match_parent"
@@ -27,15 +26,17 @@
         android:background="#80000000"
         android:visibility="gone" />
 
-    <!-- Aumentando padding horizontal -->
     <LinearLayout
         android:id="@+id/toolbar_editor"
         android:layout_width="match_parent"
-        android:layout_height="?attr/actionBarSize"
+        android:layout_height="wrap_content"
+        android:minHeight="?attr/actionBarSize"
         android:background="@android:color/transparent"
         android:gravity="center_vertical"
         android:orientation="horizontal"
         android:paddingHorizontal="20dp"
+        android:paddingTop="8dp"
+        android:paddingBottom="8dp"
         app:layout_constraintTop_toTopOf="parent">
 
         <ImageButton
@@ -70,14 +71,14 @@
             android:scaleType="centerInside"/>
     </LinearLayout>
 
-    <ScrollView
+    <androidx.core.widget.NestedScrollView
+        android:id="@+id/scroll_container"
         android:layout_width="match_parent"
         android:layout_height="0dp"
         android:fillViewport="true"
         app:layout_constraintBottom_toTopOf="@+id/bottom_bar"
         app:layout_constraintTop_toBottomOf="@+id/toolbar_editor">
 
-        <!-- Aumentando padding para más espacio de escritura -->
         <LinearLayout
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
@@ -86,7 +87,6 @@
             android:paddingTop="24dp"
             android:paddingBottom="32dp">
 
-            <!-- Mejorando tipografía del título -->
             <EditText
                 android:id="@+id/et_title"
                 android:layout_width="match_parent"
@@ -100,7 +100,6 @@
                 android:textColorHint="#BDBDBD"
                 android:lineHeight="36dp"/>
 
-            <!-- Ajustando color y espacio de la fecha -->
             <TextView
                 android:id="@+id/tv_date_label"
                 android:layout_width="wrap_content"
@@ -111,7 +110,6 @@
                 android:textSize="13sp"
                 tools:text="24 May 21:00" />
 
-            <!-- Mejorando tipografía del contenido -->
             <EditText
                 android:id="@+id/et_content"
                 android:layout_width="match_parent"
@@ -126,9 +124,8 @@
                 android:textColorHint="#BDBDBD"
                 android:lineHeight="24dp"/>
         </LinearLayout>
-    </ScrollView>
+    </androidx.core.widget.NestedScrollView>
 
-    <!-- Modernizando la barra inferior con mejor espaciado -->
     <LinearLayout
         android:id="@+id/bottom_bar"
         android:layout_width="match_parent"
@@ -152,7 +149,6 @@
             android:layout_width="20dp"
             android:layout_height="wrap_content" />
 
-        <!-- Aumentando tamaño de círculos de color para mejor usabilidad -->
         <View
             android:id="@+id/color_white"
             android:layout_width="32dp"

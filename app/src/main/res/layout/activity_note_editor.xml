@@ -57,17 +57,17 @@
             android:layout_height="44dp"
             android:layout_marginEnd="8dp"
             android:background="?attr/selectableItemBackgroundBorderless"
-            android:src="@android:drawable/ic_menu_gallery"
-            app:tint="@color/black"
-            android:tooltipText="Cambiar Fondo" />
+            android:src="@drawable/ic_menu_gallery"
+            android:tooltipText="Cambiar Fondo"
+            android:scaleType="centerInside"/>
 
         <ImageButton
             android:id="@+id/btn_save"
             android:layout_width="44dp"
             android:layout_height="44dp"
             android:background="?attr/selectableItemBackgroundBorderless"
-            android:src="@android:drawable/ic_menu_save"
-            app:tint="@color/black" />
+            android:src="@drawable/ic_menu_save"
+            android:scaleType="centerInside"/>
     </LinearLayout>
 
     <ScrollView
@@ -145,8 +145,8 @@
             android:layout_width="44dp"
             android:layout_height="44dp"
             android:background="?attr/selectableItemBackgroundBorderless"
-            android:src="@android:drawable/ic_menu_camera"
-            app:tint="#616161" />
+            android:src="@drawable/ic_menu_camera"
+            android:scaleType="centerInside"/>
 
         <Space
             android:layout_width="20dp"

@@ -192,16 +192,32 @@ class NoteEditorActivity : AppCompatActivity() {
     }
 
     private fun mostrarFondoColor(colorHex: String) {
-        ivBackground.visibility = View.GONE
+        // 1. IMPORTANTE: Limpiamos el color de la RAÍZ.
+        // Esto asegura que el área de la barra de notificaciones sea transparente
+        // (mostrando el negro/blanco del sistema) y no tome el color de la nota.
+        layoutEditor.setBackgroundColor(Color.TRANSPARENT)
+
+        // 2. Usamos el ImageView para mostrar el color SÓLIDO
+        // Como el ImageView está dentro del padding, el color empezará DEBAJO de la barra.
+        ivBackground.visibility = View.VISIBLE
         viewOverlay.visibility = View.GONE
+
+        // 3. Limpiamos cualquier imagen residual de Glide para que no se mezcle
+        ivBackground.setImageDrawable(null)
+
+        // 4. Aplicamos el color al ImageView
         try {
-            layoutEditor.setBackgroundColor(Color.parseColor(colorHex))
+            ivBackground.setBackgroundColor(Color.parseColor(colorHex))
             etContent.setBackgroundColor(Color.TRANSPARENT)
 
-            // Calculamos contraste solo para el TEXTO
+            // 5. Calculamos contraste para el texto
             val esOscuro = isColorDark(Color.parseColor(colorHex))
             actualizarEstiloTexto(esOscuro)
-        } catch (e: Exception) { e.printStackTrace() }
+        } catch (e: Exception) {
+            e.printStackTrace()
+            // Fallback por seguridad
+            layoutEditor.setBackgroundColor(Color.WHITE)
+        }
     }
 
     private fun mostrarFondoImagen(uri: Uri) {

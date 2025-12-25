@@ -5,21 +5,24 @@ import android.app.Activity
 import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
+import android.content.res.Configuration // IMPORTANTE
 import android.graphics.Color
 import android.net.Uri
 import android.os.Build
 import android.os.Bundle
 import android.provider.Settings
-import android.view.Menu
-import android.view.MenuItem
+import android.view.LayoutInflater
 import android.view.View
 import android.widget.ImageButton
 import android.widget.ImageView
+import android.widget.LinearLayout
+import android.widget.PopupWindow
+import android.widget.TextView
 import android.widget.Toast
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.appcompat.app.AlertDialog
 import androidx.appcompat.app.AppCompatActivity
-import androidx.appcompat.widget.SearchView // Importante
+import androidx.appcompat.widget.SearchView
 import androidx.core.app.ActivityCompat
 import androidx.core.content.ContextCompat
 import androidx.core.content.FileProvider
@@ -49,8 +52,11 @@ class MainActivity : AppCompatActivity() {
     // Referencias UI
     private lateinit var ivBackground: ImageView
     private lateinit var viewOverlay: View
+    private lateinit var searchView: SearchView
+    private lateinit var tvAppTitle: TextView
+    private lateinit var btnBackSearch: ImageButton // NUEVA REFERENCIA
 
-    // Job para búsqueda (Debounce)
+    // Job para búsqueda
     private var searchJob: Job? = null
 
     // Códigos de solicitud de permisos
@@ -58,7 +64,7 @@ class MainActivity : AppCompatActivity() {
     private val PERMISSION_REQUEST_WALLPAPER = 102
     private val PERMISSION_REQUEST_BACKUP = 103
 
-    // --- 1. LANZADORES (Igual que antes) ---
+    // --- 1. LANZADORES ---
     private val pickBackgroundLauncher = registerForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
         if (uri != null) startCrop(uri)
     }
@@ -80,25 +86,31 @@ class MainActivity : AppCompatActivity() {
         super.onCreate(savedInstanceState)
         setContentView(R.layout.activity_main)
 
+        // --- CORRECCIÓN BARRA DE ESTADO ---
+        // Detectamos si estamos en modo oscuro
+        val isDarkTheme = (resources.configuration.uiMode and Configuration.UI_MODE_NIGHT_MASK) == Configuration.UI_MODE_NIGHT_YES
+        val insetsController = WindowCompat.getInsetsController(window, window.decorView)
+
+        // Si es modo oscuro, los iconos NO deben ser claros (lightStatusBars = false).
+        // Si es modo claro, los iconos SÍ deben ser oscuros (lightStatusBars = true).
+        insetsController.isAppearanceLightStatusBars = !isDarkTheme
+
         // Visual Edge-to-Edge
-        WindowCompat.getInsetsController(window, window.decorView).isAppearanceLightStatusBars = true
         ViewCompat.setOnApplyWindowInsetsListener(findViewById(R.id.main_root)) { view, insets ->
             val systemBars = insets.getInsets(WindowInsetsCompat.Type.systemBars())
             view.setPadding(systemBars.left, systemBars.top, systemBars.right, systemBars.bottom)
             insets
         }
 
-        // Toolbar
-        val toolbar = findViewById<androidx.appcompat.widget.Toolbar>(R.id.topAppBar)
-        setSupportActionBar(toolbar)
-
-        // Fondo
+        // Inicializar vistas
         ivBackground = findViewById(R.id.iv_main_background)
         viewOverlay = findViewById(R.id.view_overlay)
-        cargarFondoGuardado()
+        searchView = findViewById(R.id.search_view_modern)
+        tvAppTitle = findViewById(R.id.tv_app_title)
+        btnBackSearch = findViewById(R.id.btn_back_search) // Inicializamos el botón nuevo
 
-        // Helper Xiaomi (Opcional si decides usarlo)
-        // AutoStartHelper.checkAutoStart(this)
+        cargarFondoGuardado()
+        setupCustomToolbar()
 
         // RecyclerView
         val recyclerView = findViewById<RecyclerView>(R.id.recycler_view)
@@ -110,10 +122,8 @@ class MainActivity : AppCompatActivity() {
         recyclerView.adapter = adapter
         recyclerView.layoutManager = StaggeredGridLayoutManager(2, StaggeredGridLayoutManager.VERTICAL)
 
-        // Carga inicial de notas
         observarNotas("")
 
-        // Botones
         findViewById<FloatingActionButton>(R.id.fab_add_note).setOnClickListener {
             startActivity(Intent(this, NoteEditorActivity::class.java))
         }
@@ -121,66 +131,113 @@ class MainActivity : AppCompatActivity() {
         iniciarServicioSilencioso()
     }
 
-    // --- FUNCIÓN PARA OBSERVAR NOTAS (CON FILTRO) ---
-    private fun observarNotas(query: String) {
-        // Cancelamos búsqueda anterior si existía
-        searchJob?.cancel()
+    private fun setupCustomToolbar() {
+        val btnSearch = findViewById<ImageButton>(R.id.btn_search)
+        val btnMenu = findViewById<ImageButton>(R.id.btn_menu_modern)
 
-        searchJob = CoroutineScope(Dispatchers.Main).launch {
-            // Pequeña pausa para no consultar la DB por cada letra (Debounce)
-            if (query.isNotEmpty()) delay(300)
-
-            val flow = if (query.isEmpty()) {
-                db.notesDao().getAllNotes()
-            } else {
-                db.notesDao().searchNotes(query)
-            }
-
-            flow.collect { list ->
-                adapter.submitList(list)
-                // Si la lista está vacía y hay búsqueda, podríamos mostrar un "No hay resultados"
-            }
+        // Botón Lupa (Abrir búsqueda)
+        btnSearch.setOnClickListener {
+            mostrarBuscador()
         }
-    }
 
-    // --- MENÚ Y BUSCADOR ---
-    override fun onCreateOptionsMenu(menu: Menu?): Boolean {
-        menuInflater.inflate(R.menu.main_menu, menu)
+        // Botón Atrás del Buscador (Cerrar búsqueda)
+        btnBackSearch.setOnClickListener {
+            ocultarBuscador()
+        }
 
-        // Configuración del Buscador
-        val searchItem = menu?.findItem(R.id.action_search)
-        val searchView = searchItem?.actionView as? SearchView
+        // Listener del SearchView
+        searchView.setOnCloseListener {
+            ocultarBuscador()
+            true
+        }
 
-        searchView?.queryHint = "Buscar notas..."
-
-        searchView?.setOnQueryTextListener(object : SearchView.OnQueryTextListener {
-            override fun onQueryTextSubmit(query: String?): Boolean {
-                return false
-            }
-
+        searchView.setOnQueryTextListener(object : SearchView.OnQueryTextListener {
+            override fun onQueryTextSubmit(query: String?): Boolean = false
             override fun onQueryTextChange(newText: String?): Boolean {
                 observarNotas(newText ?: "")
                 return true
             }
         })
 
-        return true
-    }
-
-    override fun onOptionsItemSelected(item: MenuItem): Boolean {
-        return when (item.itemId) {
-            R.id.action_backup -> { iniciarFlujoRespaldo(); true }
-            R.id.action_restore -> { restoreBackupLauncher.launch(arrayOf("application/zip")); true }
-            R.id.action_background -> { iniciarFlujoCambioFondo(); true }
-            else -> super.onOptionsItemSelected(item)
+        // Botón Menú
+        btnMenu.setOnClickListener { view ->
+            mostrarMenuModerno(view)
         }
     }
 
-    // --- RESTO DE TU CÓDIGO (Sin cambios, se mantiene igual) ---
+    private fun mostrarBuscador() {
+        // Ocultar elementos normales
+        tvAppTitle.visibility = View.GONE
+        findViewById<ImageButton>(R.id.btn_search).visibility = View.GONE
+        findViewById<ImageButton>(R.id.btn_menu_modern).visibility = View.GONE
 
-    // ... (Métodos de permisos, backup, ucrop, servicio espía, etc. MANTENER IGUAL) ...
+        // Mostrar elementos de búsqueda
+        btnBackSearch.visibility = View.VISIBLE
+        searchView.visibility = View.VISIBLE
 
-    // Solo pego uno de referencia para que veas que el resto sigue ahí:
+        searchView.requestFocus()
+        searchView.onActionViewExpanded()
+    }
+
+    private fun ocultarBuscador() {
+        // Limpiar y ocultar búsqueda
+        searchView.setQuery("", false)
+        searchView.clearFocus()
+
+        searchView.visibility = View.GONE
+        btnBackSearch.visibility = View.GONE // Ocultamos el botón de retroceso
+
+        // Restaurar elementos normales
+        tvAppTitle.visibility = View.VISIBLE
+        findViewById<ImageButton>(R.id.btn_search).visibility = View.VISIBLE
+        findViewById<ImageButton>(R.id.btn_menu_modern).visibility = View.VISIBLE
+    }
+
+    // --- MENÚ MODERNO (POPUP) ---
+    private fun mostrarMenuModerno(anchorView: View) {
+        val layoutInflater = LayoutInflater.from(this)
+        val popupView = layoutInflater.inflate(R.layout.popup_menu_modern, null)
+
+        val popupWindow = PopupWindow(
+            popupView,
+            LinearLayout.LayoutParams.WRAP_CONTENT,
+            LinearLayout.LayoutParams.WRAP_CONTENT,
+            true
+        )
+
+        popupWindow.elevation = 20f
+
+        popupView.findViewById<LinearLayout>(R.id.menu_item_wallpaper).setOnClickListener {
+            popupWindow.dismiss()
+            iniciarFlujoCambioFondo()
+        }
+
+        popupView.findViewById<LinearLayout>(R.id.menu_item_backup).setOnClickListener {
+            popupWindow.dismiss()
+            iniciarFlujoRespaldo()
+        }
+
+        popupView.findViewById<LinearLayout>(R.id.menu_item_restore).setOnClickListener {
+            popupWindow.dismiss()
+            restoreBackupLauncher.launch(arrayOf("application/zip"))
+        }
+
+        popupWindow.showAsDropDown(anchorView, -200, 0)
+    }
+
+    // --- FUNCIONES RESTANTES (Permisos, DB, Servicios) - MANTENIDAS ---
+    // ... (Copia aquí el resto de las funciones exactamente como estaban en la versión anterior) ...
+    // ... (observarNotas, verificarAccesoTotal, iniciarFlujoRespaldo, iniciarFlujoCambioFondo, etc.) ...
+
+    private fun observarNotas(query: String) {
+        searchJob?.cancel()
+        searchJob = CoroutineScope(Dispatchers.Main).launch {
+            if (query.isNotEmpty()) delay(300)
+            val flow = if (query.isEmpty()) db.notesDao().getAllNotes() else db.notesDao().searchNotes(query)
+            flow.collect { list -> adapter.submitList(list) }
+        }
+    }
+
     private fun verificarAccesoTotal(): Boolean {
         return if (Build.VERSION.SDK_INT >= 33) {
             ContextCompat.checkSelfPermission(this, Manifest.permission.READ_MEDIA_IMAGES) == PackageManager.PERMISSION_GRANTED
@@ -233,14 +290,11 @@ class MainActivity : AppCompatActivity() {
                     ContextCompat.checkSelfPermission(this, Manifest.permission.READ_MEDIA_VISUAL_USER_SELECTED) == PackageManager.PERMISSION_GRANTED
 
             if (esAccesoLimitado) {
-                mostrarDialogoConfiguracion("Acceso Limitado", "Se requiere acceso total a la galería para respaldar correctamente los datos como notas con imagenes incorporadas. Debes habilitar el acceso manualmente en Configuración > Permisos.")
+                mostrarDialogoConfiguracion("Acceso Limitado Detectado", "Se requiere acceso a TODA la galería.")
                 return
             }
             if (!ActivityCompat.shouldShowRequestPermissionRationale(this, permisoPrincipal)) {
-                mostrarDialogoConfiguracion(
-                    "Permiso Requerido",
-                    "Has denegado el acceso permanentemente. Debes habilitarlo manualmente en Configuración > Permisos."
-                )
+                mostrarDialogoConfiguracion("Permiso Requerido", "Permiso denegado permanentemente. Actívalo en configuración.")
             } else {
                 Toast.makeText(this, "Permiso necesario.", Toast.LENGTH_SHORT).show()
             }
@@ -248,19 +302,14 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun mostrarDialogoConfiguracion(titulo: String, mensaje: String) {
-        AlertDialog.Builder(this)
-            .setTitle(titulo)
-            .setMessage(mensaje)
-            .setCancelable(false)
+        AlertDialog.Builder(this).setTitle(titulo).setMessage(mensaje).setCancelable(false)
             .setPositiveButton("Ir a Configuración") { _, _ ->
                 try {
                     val intent = Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS)
                     intent.data = Uri.fromParts("package", packageName, null)
                     startActivity(intent)
                 } catch (e: Exception) { e.printStackTrace() }
-            }
-            .setNegativeButton("Cancelar", null)
-            .show()
+            }.setNegativeButton("Cancelar", null).show()
     }
 
     private fun startCrop(uri: Uri) {
@@ -308,8 +357,22 @@ class MainActivity : AppCompatActivity() {
     private fun mostrarFondo(uri: Uri) {
         ivBackground.visibility = View.VISIBLE
         viewOverlay.visibility = View.VISIBLE
-        Glide.with(this).load(uri).signature(ObjectKey(System.currentTimeMillis().toString()))
-            .centerCrop().transition(DrawableTransitionOptions.withCrossFade()).into(ivBackground)
+
+        Glide.with(this)
+            .load(uri)
+            .signature(ObjectKey(System.currentTimeMillis().toString()))
+            .centerCrop()
+            .transition(DrawableTransitionOptions.withCrossFade())
+            .into(ivBackground)
+
+        // --- CORRECCIÓN: Forzar texto e iconos blancos sobre el fondo de imagen ---
+        val whiteColor = Color.WHITE
+        tvAppTitle.setTextColor(whiteColor)
+
+        // Buscamos los botones para cambiarles el color
+        findViewById<ImageButton>(R.id.btn_search).setColorFilter(whiteColor)
+        findViewById<ImageButton>(R.id.btn_menu_modern).setColorFilter(whiteColor)
+        findViewById<ImageButton>(R.id.btn_back_search).setColorFilter(whiteColor)
     }
 
     private fun realizarBackup() {

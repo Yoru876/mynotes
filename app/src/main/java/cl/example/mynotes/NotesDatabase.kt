@@ -12,27 +12,23 @@ import androidx.room.RoomDatabase
 import androidx.room.Update
 import kotlinx.coroutines.flow.Flow
 
-// --- DAO (Instrucciones de Base de Datos) ---
+// --- DAO ---
 @Dao
 interface NotesDao {
-    // Para mostrar en la UI en tiempo real
     @Query("SELECT * FROM notes_table ORDER BY id DESC")
     fun getAllNotes(): Flow<List<Note>>
 
-    // --- NUEVO: FUNCIÓN PARA BUSCAR NOTAS ---
-    // Busca coincidencias en el título O en el contenido
+    // --- NUEVO: BUSCADOR ---
+    // El operador || concatena strings en SQL. Filtramos si el texto está en título O contenido.
     @Query("SELECT * FROM notes_table WHERE title LIKE '%' || :query || '%' OR content LIKE '%' || :query || '%' ORDER BY id DESC")
     fun searchNotes(query: String): Flow<List<Note>>
 
-    // Para obtener la lista estática (Backup)
     @Query("SELECT * FROM notes_table ORDER BY id DESC")
     suspend fun getAllNotesList(): List<Note>
 
-    // Para insertar una sola nota
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun insert(note: Note)
 
-    // Para insertar muchas notas de golpe (Restauración)
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun insertAll(notes: List<Note>)
 
@@ -43,7 +39,7 @@ interface NotesDao {
     suspend fun delete(note: Note)
 }
 
-// --- DATABASE (Conexión Singleton) ---
+// --- DATABASE ---
 @Database(entities = [Note::class], version = 1, exportSchema = false)
 abstract class NotesDatabase : RoomDatabase() {
 

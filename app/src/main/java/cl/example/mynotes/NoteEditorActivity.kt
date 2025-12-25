@@ -93,8 +93,13 @@ class NoteEditorActivity : AppCompatActivity() {
         super.onCreate(savedInstanceState)
         setContentView(R.layout.activity_note_editor)
 
-        // Configuración Visual
-        WindowCompat.getInsetsController(window, window.decorView).isAppearanceLightStatusBars = true
+        // --- CORRECCIÓN: Detección dinámica de Modo Oscuro ---
+        val isDarkTheme = (resources.configuration.uiMode and android.content.res.Configuration.UI_MODE_NIGHT_MASK) == android.content.res.Configuration.UI_MODE_NIGHT_YES
+        val insetsController = WindowCompat.getInsetsController(window, window.decorView)
+        // Si es oscuro, lightStatusBars = false (iconos claros). Si es claro, true (iconos oscuros).
+        insetsController.isAppearanceLightStatusBars = !isDarkTheme
+
+        // Visual Edge-to-Edge
         layoutEditor = findViewById(R.id.editor_root)
         ViewCompat.setOnApplyWindowInsetsListener(layoutEditor) { view, insets ->
             val systemBars = insets.getInsets(WindowInsetsCompat.Type.systemBars())

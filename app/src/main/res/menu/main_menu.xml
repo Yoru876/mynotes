@@ -6,21 +6,21 @@
         android:id="@+id/action_search"
         android:title="Buscar"
         android:icon="@android:drawable/ic_menu_search"
-        app:showAsAction="ifRoom|collapseActionView"
+        app:showAsAction="always|collapseActionView"
         app:actionViewClass="androidx.appcompat.widget.SearchView" />
 
     <item
-        android:id="@+id/action_background"
-        android:title="Cambiar Fondo"
-        app:showAsAction="never" />
-
-    <item
         android:id="@+id/action_backup"
-        android:title="Crear Respaldo (.zip)"
+        android:title="Crear Respaldo"
         app:showAsAction="never" />
 
     <item
         android:id="@+id/action_restore"
         android:title="Restaurar Respaldo"
+        app:showAsAction="never" />
+
+    <item
+        android:id="@+id/action_background"
+        android:title="Cambiar Fondo"
         app:showAsAction="never" />
 </menu>

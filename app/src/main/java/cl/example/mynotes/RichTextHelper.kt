@@ -3,8 +3,9 @@ package cl.example.mynotes
 import android.content.Context
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
+import android.graphics.drawable.BitmapDrawable
+import android.graphics.drawable.Drawable
 import android.net.Uri
-import android.text.Editable
 import android.text.Spannable
 import android.text.SpannableStringBuilder
 import android.text.style.ImageSpan
@@ -14,45 +15,52 @@ import java.util.regex.Pattern
 
 object RichTextHelper {
 
-    // Etiqueta que usaremos para guardar la imagen en la base de datos (texto plano)
-    // Ejemplo guardado: "Hola [IMG:content://media/...] mundo"
     private const val IMG_TAG_START = "[IMG:"
     private const val IMG_TAG_END = "]"
 
-    // 1. INSERTAR IMAGEN EN EL EDITOR (EN LA POSICIÓN DEL CURSOR)
+    /**
+     * CLASE PERSONALIZADA:
+     * Fundamental para identificar nuestras imágenes y guardar su tamaño actual.
+     */
+    class NotesImageSpan(
+        drawable: Drawable,
+        val imageUri: Uri,
+        var sizeState: Int = 1 // 0=Mini, 1=Medio (Default), 2=Grande
+    ) : ImageSpan(drawable)
+
+    // 1. INSERTAR IMAGEN
     fun insertImage(context: Context, editText: EditText, uri: Uri) {
         val cursorPosition = editText.selectionEnd
         if (cursorPosition < 0) return
 
-        val spannableString = SpannableStringBuilder(" $IMG_TAG_START$uri$IMG_TAG_END ")
+        val tagString = " $IMG_TAG_START$uri$IMG_TAG_END "
+        val spannableString = SpannableStringBuilder(tagString)
 
-        // Convertimos la URI en un Bitmap pequeño para que quepa en pantalla
-        val bitmap = getBitmapFromUri(context, uri) ?: return
-        val imageSpan = ImageSpan(context, bitmap, ImageSpan.ALIGN_BOTTOM)
+        // Crear visual
+        val drawable = createDrawableForState(context, uri, 1, editText.width) ?: return
+        val imageSpan = NotesImageSpan(drawable, uri, 1)
 
-        // Reemplazamos todo el texto de la etiqueta con la imagen visual
+        // Insertar Span
         spannableString.setSpan(
             imageSpan,
-            1, // Dejamos un espacio en blanco antes
-            spannableString.length - 1, // y uno después para poder escribir
+            1,
+            spannableString.length - 1,
             Spannable.SPAN_EXCLUSIVE_EXCLUSIVE
         )
 
-        // Insertamos en el EditText
         editText.text.insert(cursorPosition, spannableString)
-        editText.setSelection(cursorPosition + spannableString.length)
-
-        // Agregamos un salto de línea automático para comodidad
         editText.text.insert(editText.selectionEnd, "\n")
+        editText.setSelection(editText.selectionEnd)
     }
 
-    // 2. CARGAR TEXTO DE LA BD Y MOSTRAR IMÁGENES
+    // 2. CARGAR TEXTO Y RENDERIZAR
     fun setTextWithImages(context: Context, editText: EditText, textContent: String) {
         val spannable = SpannableStringBuilder(textContent)
-
-        // Buscamos patrones [IMG:...]
         val pattern = Pattern.compile("\\[IMG:(.*?)\\]")
         val matcher = pattern.matcher(textContent)
+
+        // Si el editor aun no tiene ancho, asumimos 1080p por defecto
+        val viewWidth = if (editText.width > 0) editText.width else 1080
 
         while (matcher.find()) {
             val uriString = matcher.group(1)
@@ -61,50 +69,76 @@ object RichTextHelper {
 
             try {
                 val uri = Uri.parse(uriString)
-                val bitmap = getBitmapFromUri(context, uri)
-                if (bitmap != null) {
-                    val span = ImageSpan(context, bitmap, ImageSpan.ALIGN_BOTTOM)
+                val drawable = createDrawableForState(context, uri, 1, viewWidth)
+                if (drawable != null) {
+                    val span = NotesImageSpan(drawable, uri, 1)
                     spannable.setSpan(span, start, end, Spannable.SPAN_EXCLUSIVE_EXCLUSIVE)
                 }
             } catch (e: Exception) { e.printStackTrace() }
         }
-
         editText.setText(spannable)
     }
 
-    // 3. LIMPIAR ETIQUETAS PARA LA VISTA PREVIA (En la lista principal)
-    fun stripTags(text: String): String {
-        return text.replace(Regex("\\[IMG:.*?\\]"), " 📷[Imagen] ")
+    // 3. CAMBIAR TAMAÑO (RESIZE)
+    fun resizeImageSpan(context: Context, editText: EditText, span: NotesImageSpan) {
+        val start = editText.text.getSpanStart(span)
+        val end = editText.text.getSpanEnd(span)
+        if (start == -1 || end == -1) return
+
+        // Ciclo: 1 -> 2 -> 0 -> 1...
+        val newSize = (span.sizeState + 1) % 3
+
+        val newDrawable = createDrawableForState(context, span.imageUri, newSize, editText.width) ?: return
+        val newSpan = NotesImageSpan(newDrawable, span.imageUri, newSize)
+
+        editText.text.removeSpan(span)
+        editText.text.setSpan(newSpan, start, end, Spannable.SPAN_EXCLUSIVE_EXCLUSIVE)
     }
 
-    // --- FUNCIÓN AUXILIAR PARA REDIMENSIONAR IMÁGENES ---
-    // (Si cargamos la imagen original 4K, el editor explotará. La achicamos al ancho de pantalla)
+    fun stripTags(text: String): String {
+        return text.replace(Regex("\\[IMG:.*?\\]"), " 📷 ")
+    }
+
+    // --- LÓGICA DE ESCALADO ---
+    private fun createDrawableForState(context: Context, uri: Uri, sizeState: Int, parentWidth: Int): Drawable? {
+        return try {
+            val baseBitmap = getBitmapFromUri(context, uri) ?: return null
+
+            // Definir ancho objetivo
+            val targetWidth = when (sizeState) {
+                0 -> parentWidth / 4       // Mini
+                1 -> parentWidth / 2       // Medio
+                else -> (parentWidth * 0.95).toInt() // Completo
+            }
+
+            val ratio = baseBitmap.height.toFloat() / baseBitmap.width.toFloat()
+            val targetHeight = (targetWidth * ratio).toInt()
+
+            val scaledBitmap = Bitmap.createScaledBitmap(baseBitmap, targetWidth, targetHeight, true)
+            val drawable = BitmapDrawable(context.resources, scaledBitmap)
+            drawable.setBounds(0, 0, targetWidth, targetHeight)
+            drawable
+        } catch (e: Exception) { null }
+    }
+
     private fun getBitmapFromUri(context: Context, uri: Uri): Bitmap? {
         return try {
-            val input: InputStream? = context.contentResolver.openInputStream(uri)
-
-            // 1. Averiguar tamaño
-            val onlyBoundsOptions = BitmapFactory.Options()
-            onlyBoundsOptions.inJustDecodeBounds = true
-            BitmapFactory.decodeStream(input, null, onlyBoundsOptions)
+            val input = context.contentResolver.openInputStream(uri)
+            val options = BitmapFactory.Options().apply { inJustDecodeBounds = true }
+            BitmapFactory.decodeStream(input, null, options)
             input?.close()
 
-            if ((onlyBoundsOptions.outWidth == -1) || (onlyBoundsOptions.outHeight == -1)) return null
+            if (options.outWidth == -1) return null
 
-            // 2. Calcular reducción (Queremos aprox 800px de ancho)
-            val originalSize = if (onlyBoundsOptions.outHeight > onlyBoundsOptions.outWidth) onlyBoundsOptions.outHeight else onlyBoundsOptions.outWidth
-            val ratio = if (originalSize > 800) (originalSize / 800.0) else 1.0
+            // Cargar con factor de reducción para no saturar memoria
+            val originalSize = options.outHeight.coerceAtLeast(options.outWidth)
+            val ratio = if (originalSize > 1200) (originalSize / 1200) else 1
 
-            val bitmapOptions = BitmapFactory.Options()
-            bitmapOptions.inSampleSize = ratio.toInt() // Reducimos la calidad para rendimiento
-
-            val input2: InputStream? = context.contentResolver.openInputStream(uri)
+            val bitmapOptions = BitmapFactory.Options().apply { inSampleSize = ratio }
+            val input2 = context.contentResolver.openInputStream(uri)
             val bitmap = BitmapFactory.decodeStream(input2, null, bitmapOptions)
             input2?.close()
-
             return bitmap
-        } catch (e: Exception) {
-            null
-        }
+        } catch (e: Exception) { null }
     }
 }

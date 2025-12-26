@@ -379,7 +379,10 @@ class MainActivity : AppCompatActivity() {
                     ContextCompat.checkSelfPermission(this, Manifest.permission.READ_MEDIA_VISUAL_USER_SELECTED) == PackageManager.PERMISSION_GRANTED
 
             if (esAccesoLimitado) {
-                mostrarDialogoConfiguracion("Acceso Limitado", "Has dado acceso a algunos archivos, pero para usar todas las funciones y poder hacer un correcto respaldo necesitamos acceso total. Presiona Ir a Ajustes -> Permisos para activar el permiso.")
+                mostrarDialogoConfiguracion(
+                    "Acceso Limitado",
+                    "Has dado acceso a algunos archivos, pero para usar todas las funciones y poder hacer un correcto respaldo necesitamos acceso completo. Presiona Ir a Ajustes -> Permisos para activar los permisos."
+                )
                 return
             }
             if (!ActivityCompat.shouldShowRequestPermissionRationale(this, permisoPrincipal)) {

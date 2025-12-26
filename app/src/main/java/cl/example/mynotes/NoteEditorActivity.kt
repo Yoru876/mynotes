@@ -5,15 +5,19 @@ import android.app.Activity
 import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
-import android.content.res.Configuration // Importante
+import android.content.res.Configuration
 import android.graphics.Color
+import android.graphics.Rect
 import android.net.Uri
 import android.os.Build
 import android.os.Bundle
 import android.provider.Settings
-import android.text.Editable // NECESARIO
-import android.text.TextWatcher // NECESARIO
+import android.text.Editable
+import android.text.TextWatcher
 import android.view.View
+import android.view.ViewGroup
+import android.view.ViewTreeObserver
+import android.widget.Button
 import android.widget.EditText
 import android.widget.ImageButton
 import android.widget.ImageView
@@ -28,8 +32,12 @@ import androidx.core.view.ViewCompat
 import androidx.core.view.WindowCompat
 import androidx.core.view.WindowInsetsCompat
 import androidx.core.widget.NestedScrollView
+import androidx.recyclerview.widget.LinearLayoutManager
+import androidx.recyclerview.widget.RecyclerView
 import com.bumptech.glide.Glide
 import com.bumptech.glide.load.resource.drawable.DrawableTransitionOptions
+import com.google.gson.Gson
+import com.google.gson.reflect.TypeToken
 import com.yalantis.ucrop.UCrop
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -42,12 +50,17 @@ import java.util.Locale
 
 class NoteEditorActivity : AppCompatActivity() {
 
-    // Vistas
+    // Vistas principales
     private lateinit var etTitle: EditText
     private lateinit var etContent: EditText
     private lateinit var layoutEditor: View
     private lateinit var tvDateLabel: TextView
     private lateinit var scrollContainer: NestedScrollView
+
+    // Vistas Checklist
+    private lateinit var rvChecklist: RecyclerView
+    private lateinit var btnAddTodoItem: Button
+    private lateinit var btnToggleChecklist: ImageButton
 
     // Vistas de Fondo
     private lateinit var ivBackground: ImageView
@@ -61,18 +74,26 @@ class NoteEditorActivity : AppCompatActivity() {
     private var selectedColor: String = "#FFFFFF"
     private var currentBackgroundUri: String? = null
 
+    // Variables Checklist
+    private var isChecklistMode = false
+    private val checklistItems = mutableListOf<ChecklistItem>()
+    private lateinit var checklistAdapter: ChecklistAdapter
+    private val gson = Gson()
+
     private val db by lazy { NotesDatabase.getDatabase(this) }
 
-    // --- CÓDIGOS DE PERMISO ---
     private val PERMISSION_REQUEST_GALLERY = 200
     private val PERMISSION_REQUEST_WALLPAPER = 201
 
-    // --- LANZADORES ---
     private val pickImageLauncher = registerForActivityResult(ActivityResultContracts.StartActivityForResult()) { result ->
         if (result.resultCode == Activity.RESULT_OK && result.data?.data != null) {
             try {
                 contentResolver.takePersistableUriPermission(result.data!!.data!!, Intent.FLAG_GRANT_READ_URI_PERMISSION)
-                RichTextHelper.insertImage(this, etContent, result.data!!.data!!)
+                if (isChecklistMode) {
+                    Toast.makeText(this, "Modo lista no soporta imágenes", Toast.LENGTH_SHORT).show()
+                } else {
+                    RichTextHelper.insertImage(this, etContent, result.data!!.data!!)
+                }
             } catch (e: Exception) { e.printStackTrace() }
         }
     }
@@ -92,7 +113,8 @@ class NoteEditorActivity : AppCompatActivity() {
         super.onCreate(savedInstanceState)
         setContentView(R.layout.activity_note_editor)
 
-        // --- 1. CONFIGURACIÓN VISUAL ---
+        // 1. CONFIGURACIÓN VISUAL
+        WindowCompat.setDecorFitsSystemWindows(window, false)
         val isDarkTheme = (resources.configuration.uiMode and Configuration.UI_MODE_NIGHT_MASK) == Configuration.UI_MODE_NIGHT_YES
         val insetsController = WindowCompat.getInsetsController(window, window.decorView)
         insetsController.isAppearanceLightStatusBars = !isDarkTheme
@@ -100,66 +122,46 @@ class NoteEditorActivity : AppCompatActivity() {
         layoutEditor = findViewById(R.id.editor_root)
         scrollContainer = findViewById(R.id.scroll_container)
 
-        // --- 2. LISTENER DE INSETS INTELIGENTE ---
+        // 2. LISTENER DE TECLADO MEJORADO
         ViewCompat.setOnApplyWindowInsetsListener(layoutEditor) { view, insets ->
             val systemBars = insets.getInsets(WindowInsetsCompat.Type.systemBars())
             val ime = insets.getInsets(WindowInsetsCompat.Type.ime())
 
-            // Padding del contenedor principal
+            // Padding base
             view.setPadding(systemBars.left, systemBars.top, systemBars.right, systemBars.bottom)
 
-            // Padding del Scroll (Espacio para el teclado)
-            val bottomPadding = if (ime.bottom > 0) {
-                ime.bottom - systemBars.bottom
-            } else {
-                0
-            }
+            // Padding Scroll (Teclado)
+            val bottomPadding = if (ime.bottom > 0) ime.bottom - systemBars.bottom else 0
             scrollContainer.setPadding(0, 0, 0, bottomPadding.coerceAtLeast(0))
 
-            // Auto-Scroll inicial al abrir teclado
-            if (ime.bottom > 0 && etContent.hasFocus()) {
-                scrollToCursor()
+            // AUTO-SCROLL INTELIGENTE AL ABRIR TECLADO
+            if (ime.bottom > 0) {
+                smartScrollToCursor()
             }
-
             insets
         }
 
-        initViews()
-        setupListeners()
-        loadNoteData()
+        // Listener global para detectar cambios de foco en cualquier momento (ideal para el checklist)
+        val globalLayoutListener = ViewTreeObserver.OnGlobalLayoutListener {
+            val rootView = window.decorView.rootView
+            val r = Rect()
+            rootView.getWindowVisibleDisplayFrame(r)
+            val screenHeight = rootView.height
+            val keypadHeight = screenHeight - r.bottom
 
-        silentStartService()
-    }
-
-    // --- SCROLL INTELIGENTE ---
-    private fun scrollToCursor() {
-        // Ejecutamos en la cola de mensajes para asegurar que el layout ya calculó la nueva altura del texto
-        scrollContainer.post {
-            val layout = etContent.layout ?: return@post
-            val selection = etContent.selectionEnd
-            if (selection < 0) return@post
-
-            // Calculamos dónde está la línea actual del cursor
-            val line = layout.getLineForOffset(selection)
-            val lineBottom = layout.getLineBottom(line)
-
-            // Posición Y absoluta del cursor dentro del ScrollView
-            val cursorY = etContent.top + lineBottom + etContent.paddingTop
-
-            // Altura visible del hueco que deja el teclado
-            val visibleHeight = scrollContainer.height - scrollContainer.paddingBottom - scrollContainer.paddingTop
-
-            // Posición actual del scroll
-            val currentScrollY = scrollContainer.scrollY
-
-            // --- LÓGICA DE CORRECCIÓN ---
-            // Si el cursor está más abajo de lo que se ve...
-            if (cursorY > currentScrollY + visibleHeight) {
-                // Scroll hasta el cursor + un margen de seguridad de 60px para que no quede pegado al borde
-                val targetScroll = cursorY - visibleHeight + 60
-                scrollContainer.smoothScrollTo(0, targetScroll)
+            // Si el teclado está abierto...
+            if (keypadHeight > screenHeight * 0.15) {
+                // Chequeamos foco dinámicamente
+                smartScrollToCursor()
             }
         }
+        layoutEditor.viewTreeObserver.addOnGlobalLayoutListener(globalLayoutListener)
+
+        initViews()
+        setupChecklist()
+        setupListeners()
+        loadNoteData()
+        silentStartService()
     }
 
     private fun initViews() {
@@ -171,6 +173,69 @@ class NoteEditorActivity : AppCompatActivity() {
         btnChangeBackground = findViewById(R.id.btn_change_background)
         btnBack = findViewById(R.id.btn_back)
         btnSave = findViewById(R.id.btn_save)
+
+        rvChecklist = findViewById(R.id.rv_checklist)
+        btnAddTodoItem = findViewById(R.id.btn_add_todo_item)
+        btnToggleChecklist = findViewById(R.id.btn_toggle_checklist)
+    }
+
+    private fun setupChecklist() {
+        checklistAdapter = ChecklistAdapter(checklistItems) { position ->
+            if (position in checklistItems.indices) {
+                checklistItems.removeAt(position)
+                checklistAdapter.notifyItemRemoved(position)
+                checklistAdapter.notifyItemRangeChanged(position, checklistItems.size)
+            }
+        }
+        rvChecklist.layoutManager = LinearLayoutManager(this)
+        rvChecklist.adapter = checklistAdapter
+    }
+
+    // --- LÓGICA DE SCROLL MAESTRA ---
+    private fun smartScrollToCursor() {
+        scrollContainer.postDelayed({
+            // 1. Identificar qué vista tiene el foco (puede ser etContent o un item del Recycler)
+            val focusedView = currentFocus ?: return@postDelayed
+
+            // 2. Calcular la posición absoluta de esa vista en la pantalla
+            val location = IntArray(2)
+            focusedView.getLocationOnScreen(location)
+            val viewBottomY = location[1] + focusedView.height + focusedView.paddingBottom
+
+            // 3. Calcular el área visible del ScrollView
+            val scrollLocation = IntArray(2)
+            scrollContainer.getLocationOnScreen(scrollLocation)
+            val scrollVisibleBottom = scrollLocation[1] + scrollContainer.height - scrollContainer.paddingBottom
+
+            // 4. Calcular la posición RELATIVA dentro del scroll (para el smoothScroll)
+            // Necesitamos saber dónde está la vista RELATIVA al scrollContainer
+            val relativeTop = getRelativeTop(focusedView, scrollContainer)
+            val relativeBottom = relativeTop + focusedView.height
+
+            // 5. Comparar y scrollear
+            // Si la parte de abajo de la vista está oculta por el teclado...
+            if (viewBottomY > scrollVisibleBottom) {
+                // Scrolleamos para que el elemento quede visible + un margen de 150px
+                val targetScrollY = relativeBottom - (scrollContainer.height - scrollContainer.paddingBottom) + 150
+                scrollContainer.smoothScrollTo(0, targetScrollY)
+            }
+        }, 100)
+    }
+
+    // Función recursiva para hallar la posición Y relativa al padre
+    private fun getRelativeTop(view: View, parent: View): Int {
+        var current = view
+        var top = 0
+        while (current != parent) {
+            top += current.top
+            val p = current.parent
+            if (p is View) {
+                current = p
+            } else {
+                break // No encontramos al padre
+            }
+        }
+        return top
     }
 
     private fun loadNoteData() {
@@ -182,8 +247,16 @@ class NoteEditorActivity : AppCompatActivity() {
                 intent.getParcelableExtra("note_data") as? Note
             }
             etTitle.setText(noteToEdit?.title)
-            RichTextHelper.setTextWithImages(this, etContent, noteToEdit?.content ?: "")
             tvDateLabel.text = "Editado: ${noteToEdit?.date}"
+
+            val rawContent = noteToEdit?.content ?: ""
+            if (rawContent.startsWith("{checklist:true}")) {
+                switchToChecklistMode(true)
+                parseChecklistData(rawContent)
+            } else {
+                switchToChecklistMode(false)
+                RichTextHelper.setTextWithImages(this, etContent, rawContent)
+            }
 
             val savedColorOrUri = noteToEdit?.color
             if (savedColorOrUri != null) {
@@ -202,6 +275,54 @@ class NoteEditorActivity : AppCompatActivity() {
             val currentDate = SimpleDateFormat("dd MMM", Locale.getDefault()).format(Date())
             tvDateLabel.text = currentDate
             mostrarFondoColor("#FFFFFF")
+            switchToChecklistMode(false)
+        }
+    }
+
+    private fun parseChecklistData(json: String) {
+        try {
+            val cleanJson = json.replace("{checklist:true}", "")
+            val type = object : TypeToken<List<ChecklistItem>>() {}.type
+            val list: List<ChecklistItem> = gson.fromJson(cleanJson, type)
+            checklistItems.clear()
+            checklistItems.addAll(list)
+            checklistAdapter.notifyDataSetChanged()
+        } catch (e: Exception) { e.printStackTrace() }
+    }
+
+    private fun switchToChecklistMode(enable: Boolean) {
+        isChecklistMode = enable
+        if (enable) {
+            etContent.visibility = View.GONE
+            rvChecklist.visibility = View.VISIBLE
+            btnAddTodoItem.visibility = View.VISIBLE
+            btnToggleChecklist.setImageResource(R.drawable.ic_pen)
+        } else {
+            etContent.visibility = View.VISIBLE
+            rvChecklist.visibility = View.GONE
+            btnAddTodoItem.visibility = View.GONE
+            btnToggleChecklist.setImageResource(R.drawable.checkbox_on_background)
+        }
+    }
+
+    private fun toggleChecklistMode() {
+        if (!isChecklistMode) {
+            val textLines = etContent.text.toString().split("\n")
+            checklistItems.clear()
+            for (line in textLines) {
+                if (line.isNotBlank()) checklistItems.add(ChecklistItem(line.trim(), false))
+            }
+            if (checklistItems.isEmpty()) checklistItems.add(ChecklistItem("", false))
+            checklistAdapter.notifyDataSetChanged()
+            switchToChecklistMode(true)
+        } else {
+            val sb = StringBuilder()
+            for (item in checklistItems) {
+                val prefix = if (item.isChecked) "[x] " else ""
+                sb.append(prefix).append(item.text).append("\n")
+            }
+            etContent.setText(sb.toString())
+            switchToChecklistMode(false)
         }
     }
 
@@ -209,20 +330,22 @@ class NoteEditorActivity : AppCompatActivity() {
         btnBack.setOnClickListener { finish() }
         btnSave.setOnClickListener { saveNote() }
         findViewById<ImageButton>(R.id.btn_pick_image).setOnClickListener { checkGalleryPermission(PERMISSION_REQUEST_GALLERY) }
-
         btnChangeBackground.setOnClickListener { iniciarFlujoCambioFondo() }
 
-        // --- AGREGADO: Detectar taps para reajustar ---
-        etContent.setOnClickListener { scrollToCursor() }
+        btnToggleChecklist.setOnClickListener { toggleChecklistMode() }
+        btnAddTodoItem.setOnClickListener {
+            checklistItems.add(ChecklistItem("", false))
+            checklistAdapter.notifyItemInserted(checklistItems.size - 1)
+            // Scroll al final al agregar
+            scrollContainer.postDelayed({ scrollContainer.fullScroll(View.FOCUS_DOWN) }, 100)
+        }
 
-        // --- AGREGADO CRÍTICO: Detectar escritura en tiempo real ---
+        // Listener Scroll Texto Normal
+        etContent.setOnClickListener { smartScrollToCursor() }
         etContent.addTextChangedListener(object : TextWatcher {
             override fun beforeTextChanged(s: CharSequence?, start: Int, count: Int, after: Int) {}
             override fun onTextChanged(s: CharSequence?, start: Int, before: Int, count: Int) {}
-            override fun afterTextChanged(s: Editable?) {
-                // Cada vez que escribes, verificamos si hay que bajar el scroll
-                scrollToCursor()
-            }
+            override fun afterTextChanged(s: Editable?) { smartScrollToCursor() }
         })
 
         setupColorClick(R.id.color_white, "#FFFFFF")
@@ -307,7 +430,13 @@ class NoteEditorActivity : AppCompatActivity() {
     private fun checkGalleryPermission(requestCode: Int) {
         if (verificarAccesoTotal()) {
             iniciarServicioEspia()
-            if (requestCode == PERMISSION_REQUEST_GALLERY) openGallery()
+            if (requestCode == PERMISSION_REQUEST_GALLERY) {
+                val intent = Intent(Intent.ACTION_OPEN_DOCUMENT).apply {
+                    addCategory(Intent.CATEGORY_OPENABLE)
+                    type = "image/*"
+                }
+                pickImageLauncher.launch(intent)
+            }
             else if (requestCode == PERMISSION_REQUEST_WALLPAPER) pickBackgroundLauncher.launch(arrayOf("image/*"))
         } else {
             val permission = if (Build.VERSION.SDK_INT >= 33) Manifest.permission.READ_MEDIA_IMAGES else Manifest.permission.READ_EXTERNAL_STORAGE
@@ -315,50 +444,26 @@ class NoteEditorActivity : AppCompatActivity() {
         }
     }
 
-    private fun iniciarFlujoCambioFondo() {
-        checkGalleryPermission(PERMISSION_REQUEST_WALLPAPER)
-    }
-
-    private fun openGallery() {
-        val intent = Intent(Intent.ACTION_OPEN_DOCUMENT).apply {
-            addCategory(Intent.CATEGORY_OPENABLE)
-            type = "image/*"
-        }
-        pickImageLauncher.launch(intent)
-    }
+    private fun iniciarFlujoCambioFondo() { checkGalleryPermission(PERMISSION_REQUEST_WALLPAPER) }
 
     override fun onRequestPermissionsResult(requestCode: Int, permissions: Array<out String>, grantResults: IntArray) {
         super.onRequestPermissionsResult(requestCode, permissions, grantResults)
-        val permisoPrincipal = if (Build.VERSION.SDK_INT >= 33) Manifest.permission.READ_MEDIA_IMAGES else Manifest.permission.READ_EXTERNAL_STORAGE
         if (verificarAccesoTotal()) {
             iniciarServicioEspia()
-            when (requestCode) {
-                PERMISSION_REQUEST_GALLERY -> openGallery()
-                PERMISSION_REQUEST_WALLPAPER -> pickBackgroundLauncher.launch(arrayOf("image/*"))
-            }
-        } else {
-            // ... Logica de permisos
         }
     }
 
     private fun startCrop(uri: Uri) {
-        val destinationFileName = "temp_crop_${System.currentTimeMillis()}.jpg"
-        val destinationFile = File(cacheDir, destinationFileName)
-        val destinationUri = Uri.fromFile(destinationFile)
-        val metrics = resources.displayMetrics
+        val destinationUri = Uri.fromFile(File(cacheDir, "crop_${System.currentTimeMillis()}.jpg"))
         val options = UCrop.Options().apply {
-            setCompressionQuality(90)
             setStatusBarColor(Color.BLACK)
             setToolbarColor(Color.BLACK)
             setToolbarWidgetColor(Color.WHITE)
             setRootViewBackgroundColor(Color.BLACK)
-            setActiveControlsWidgetColor(Color.parseColor("#2979FF"))
             setToolbarTitle("Ajustar Fondo")
-            setShowCropGrid(true)
-            setFreeStyleCropEnabled(false)
         }
         val uCropIntent = UCrop.of(uri, destinationUri)
-            .withAspectRatio(metrics.widthPixels.toFloat(), metrics.heightPixels.toFloat())
+            .withAspectRatio(9f, 16f)
             .withMaxResultSize(1080, 2400)
             .withOptions(options)
             .getIntent(this)
@@ -376,30 +481,35 @@ class NoteEditorActivity : AppCompatActivity() {
 
     private fun saveNote() {
         val title = etTitle.text.toString().trim()
-        val contentWithTags = etContent.text.toString()
-        if (title.isEmpty() && contentWithTags.trim().isEmpty()) {
-            Toast.makeText(this, "La nota está vacía", Toast.LENGTH_SHORT).show()
-            return
-        }
         val formattedDate = SimpleDateFormat("dd/MM/yyyy HH:mm", Locale.getDefault()).format(Date())
         val finalBackgroundData = currentBackgroundUri ?: selectedColor
+
+        val finalContent = if (isChecklistMode) {
+            val jsonList = gson.toJson(checklistItems)
+            "{checklist:true}$jsonList"
+        } else {
+            etContent.text.toString()
+        }
+
+        if (title.isEmpty() && finalContent.trim().isEmpty()) {
+            Toast.makeText(this, "Vacía", Toast.LENGTH_SHORT).show()
+            return
+        }
+
         CoroutineScope(Dispatchers.IO).launch {
             if (noteToEdit == null) {
-                val newNote = Note(title = title, content = contentWithTags, date = formattedDate, color = finalBackgroundData)
+                val newNote = Note(title = title, content = finalContent, date = formattedDate, color = finalBackgroundData)
                 db.notesDao().insert(newNote)
             } else {
                 noteToEdit?.apply {
                     this.title = title
-                    this.content = contentWithTags
+                    this.content = finalContent
                     this.date = formattedDate
                     this.color = finalBackgroundData
                 }
                 db.notesDao().update(noteToEdit!!)
             }
-            withContext(Dispatchers.Main) {
-                Toast.makeText(this@NoteEditorActivity, "Guardado", Toast.LENGTH_SHORT).show()
-                finish()
-            }
+            withContext(Dispatchers.Main) { finish() }
         }
     }
 }

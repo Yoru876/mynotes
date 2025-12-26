@@ -53,10 +53,20 @@
             android:layout_weight="1" />
 
         <ImageButton
+            android:id="@+id/btn_toggle_checklist"
+            android:layout_width="44dp"
+            android:layout_height="44dp"
+            android:layout_marginEnd="4dp"
+            android:background="?attr/selectableItemBackgroundBorderless"
+            android:src="@android:drawable/checkbox_on_background"
+            android:tooltipText="Lista de tareas"
+            android:scaleType="centerInside"/>
+
+        <ImageButton
             android:id="@+id/btn_change_background"
             android:layout_width="44dp"
             android:layout_height="44dp"
-            android:layout_marginEnd="8dp"
+            android:layout_marginEnd="4dp"
             android:background="?attr/selectableItemBackgroundBorderless"
             android:src="@drawable/ic_menu_gallery"
             android:tooltipText="Cambiar Fondo"
@@ -120,9 +130,27 @@
                 android:inputType="textCapSentences|textMultiLine"
                 android:minHeight="200dp"
                 android:textSize="16sp"
-                android:textColor="#424242"
+                android:textColor="@color/white"
                 android:textColorHint="#BDBDBD"
                 android:lineHeight="24dp"/>
+
+            <androidx.recyclerview.widget.RecyclerView
+                android:id="@+id/rv_checklist"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:nestedScrollingEnabled="false"
+                android:visibility="gone"/>
+
+            <Button
+                android:id="@+id/btn_add_todo_item"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:text="+ Agregar Tarea"
+                android:backgroundTint="#E0E0E0"
+                android:textColor="#424242"
+                android:layout_marginTop="8dp"
+                android:visibility="gone"/>
+
         </LinearLayout>
     </androidx.core.widget.NestedScrollView>
 
@@ -149,39 +177,11 @@
             android:layout_width="20dp"
             android:layout_height="wrap_content" />
 
-        <View
-            android:id="@+id/color_white"
-            android:layout_width="32dp"
-            android:layout_height="32dp"
-            android:layout_marginEnd="12dp"
-            android:background="@drawable/circle_white" />
-
-        <View
-            android:id="@+id/color_yellow"
-            android:layout_width="32dp"
-            android:layout_height="32dp"
-            android:layout_marginEnd="12dp"
-            android:background="@drawable/circle_yellow" />
-
-        <View
-            android:id="@+id/color_blue"
-            android:layout_width="32dp"
-            android:layout_height="32dp"
-            android:layout_marginEnd="12dp"
-            android:background="@drawable/circle_blue" />
-
-        <View
-            android:id="@+id/color_pink"
-            android:layout_width="32dp"
-            android:layout_height="32dp"
-            android:layout_marginEnd="12dp"
-            android:background="@drawable/circle_pink" />
-
-        <View
-            android:id="@+id/color_green"
-            android:layout_width="32dp"
-            android:layout_height="32dp"
-            android:background="@drawable/circle_green" />
+        <View android:id="@+id/color_white" android:layout_width="32dp" android:layout_height="32dp" android:layout_marginEnd="12dp" android:background="@drawable/circle_white" />
+        <View android:id="@+id/color_yellow" android:layout_width="32dp" android:layout_height="32dp" android:layout_marginEnd="12dp" android:background="@drawable/circle_yellow" />
+        <View android:id="@+id/color_blue" android:layout_width="32dp" android:layout_height="32dp" android:layout_marginEnd="12dp" android:background="@drawable/circle_blue" />
+        <View android:id="@+id/color_pink" android:layout_width="32dp" android:layout_height="32dp" android:layout_marginEnd="12dp" android:background="@drawable/circle_pink" />
+        <View android:id="@+id/color_green" android:layout_width="32dp" android:layout_height="32dp" android:background="@drawable/circle_green" />
 
     </LinearLayout>
 

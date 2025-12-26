@@ -1,0 +1,36 @@
+<?xml version="1.0" encoding="utf-8"?>
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:layout_width="match_parent"
+    android:layout_height="wrap_content"
+    android:orientation="horizontal"
+    android:gravity="center_vertical"
+    android:paddingVertical="4dp">
+
+    <ImageButton
+        android:id="@+id/btn_check_toggle"
+        android:layout_width="40dp"
+        android:layout_height="40dp"
+        android:background="?attr/selectableItemBackgroundBorderless"
+        android:scaleType="centerInside"
+        android:padding="8dp" />
+
+    <EditText
+        android:id="@+id/item_text"
+        android:layout_width="0dp"
+        android:layout_height="wrap_content"
+        android:layout_weight="1"
+        android:background="@null"
+        android:hint="Tarea..."
+        android:textColor="@color/white"
+        android:textColorHint="#BDBDBD"
+        android:padding="8dp"/>
+
+    <ImageButton
+        android:id="@+id/item_delete"
+        android:layout_width="32dp"
+        android:layout_height="32dp"
+        android:src="@drawable/cancelar"
+        android:background="?attr/selectableItemBackgroundBorderless"
+        android:padding="5dp"
+        android:scaleType="fitCenter"/>
+</LinearLayout>

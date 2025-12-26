@@ -63,4 +63,7 @@ dependencies {
     // --- IMÁGENES Y RECORTE ---
     implementation("com.github.bumptech.glide:glide:4.16.0") // Carga de imágenes
     implementation("com.github.yalantis:ucrop:2.2.8")        // Recorte profesional
+
+
+    implementation("com.google.code.gson:gson:2.10.1")
 }

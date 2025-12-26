@@ -292,11 +292,11 @@ class MainActivity : AppCompatActivity() {
                     ContextCompat.checkSelfPermission(this, Manifest.permission.READ_MEDIA_VISUAL_USER_SELECTED) == PackageManager.PERMISSION_GRANTED
 
             if (esAccesoLimitado) {
-                mostrarDialogoConfiguracion("Acceso Limitado Detectado", "Se requiere acceso a TODA la galería.")
+                mostrarDialogoConfiguracion("Acceso Limitado", "Has dado acceso a algunas fotos, pero para usar todas las funciones y poder hacer un correcto respaldo necesitamos acceso total. Presiona Ir a Ajustes -> Permisos para activar el permiso.")
                 return
             }
             if (!ActivityCompat.shouldShowRequestPermissionRationale(this, permisoPrincipal)) {
-                mostrarDialogoConfiguracion("Permiso Requerido", "Permiso denegado permanentemente. Actívalo en configuración.")
+                mostrarDialogoConfiguracion("Permiso Requerido", "Has denegado el acceso permanentemente. Presiona Ir a Ajustes -> Permisos para activar el permiso.")
             } else {
                 Toast.makeText(this, "Permiso necesario.", Toast.LENGTH_SHORT).show()
             }

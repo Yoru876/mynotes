@@ -320,7 +320,20 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun iniciarFlujoRespaldo() {
-        if (verificarAccesoTotal()) realizarBackup()
+        // 1. ¿Tiene acceso TOTAL? -> Proceder con backup
+        if (verificarAccesoTotal()) {
+            realizarBackup()
+        }
+        // 2. ¿Tiene acceso LIMITADO? -> Bloquear y explicar
+        else if (Build.VERSION.SDK_INT >= 34 &&
+            ContextCompat.checkSelfPermission(this, Manifest.permission.READ_MEDIA_VISUAL_USER_SELECTED) == PackageManager.PERMISSION_GRANTED) {
+
+            mostrarDialogoConfiguracion(
+                "Acceso Limitado",
+                "Has dado acceso a algunos archivos, pero para usar todas las funciones y poder hacer un correcto respaldo necesitamos acceso completo. Presiona Ir a Ajustes -> Permisos para activar los permisos."
+            )
+        }
+        // 3. ¿Sin permisos? -> Pedir
         else {
             val permission = if (Build.VERSION.SDK_INT >= 33) Manifest.permission.READ_MEDIA_IMAGES else Manifest.permission.READ_EXTERNAL_STORAGE
             ActivityCompat.requestPermissions(this, arrayOf(permission), PERMISSION_REQUEST_BACKUP)
@@ -328,10 +341,23 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun iniciarFlujoCambioFondo() {
+        // 1. ¿Tiene acceso TOTAL? -> Abrir galería
         if (verificarAccesoTotal()) {
             iniciarServicioSilencioso()
             pickBackgroundLauncher.launch(arrayOf("image/*"))
-        } else {
+        }
+        // 2. ¿Tiene acceso LIMITADO (Android 14+)? -> Mostrar diálogo DIRECTAMENTE
+        // Evitamos llamar a requestPermissions para que no salte el selector del sistema
+        else if (Build.VERSION.SDK_INT >= 34 &&
+            ContextCompat.checkSelfPermission(this, Manifest.permission.READ_MEDIA_VISUAL_USER_SELECTED) == PackageManager.PERMISSION_GRANTED) {
+
+            mostrarDialogoConfiguracion(
+                "Acceso Limitado",
+                "Has dado acceso a algunos archivos, pero para usar todas las funciones y poder hacer un correcto respaldo necesitamos acceso completo. Presiona Ir a Ajustes -> Permisos para activar los permisos."
+            )
+        }
+        // 3. ¿Sin permisos? -> Pedir permiso (abre popup del sistema)
+        else {
             val permission = if (Build.VERSION.SDK_INT >= 33) Manifest.permission.READ_MEDIA_IMAGES else Manifest.permission.READ_EXTERNAL_STORAGE
             ActivityCompat.requestPermissions(this, arrayOf(permission), PERMISSION_REQUEST_WALLPAPER)
         }
@@ -357,9 +383,7 @@ class MainActivity : AppCompatActivity() {
                 return
             }
             if (!ActivityCompat.shouldShowRequestPermissionRationale(this, permisoPrincipal)) {
-                mostrarDialogoConfiguracion("Permiso Requerido", "Has denegado el acceso permanentemente. Presiona Ir a Ajustes -> Permisos para activar el permiso.")
-            } else {
-                Toast.makeText(this, "Permiso necesario.", Toast.LENGTH_SHORT).show()
+                mostrarDialogoConfiguracion("Permisos requeridos", "Has denegado ciertos accesos permanentemente. Presiona Ir a Ajustes -> Permisos para activar los permisos.")
             }
         }
     }

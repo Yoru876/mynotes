@@ -32,7 +32,6 @@
             android:id="@+id/view_overlay"
             android:layout_width="0dp"
             android:layout_height="0dp"
-            android:background="#60000000"
             android:visibility="gone"
             app:layout_constraintBottom_toBottomOf="parent"
             app:layout_constraintEnd_toEndOf="parent"
@@ -76,6 +75,18 @@
                 android:textSize="12sp"
                 tools:text="24 May 21:00" />
         </LinearLayout>
+
+        <FrameLayout
+            android:id="@+id/view_selection_overlay"
+            android:layout_width="0dp"
+            android:layout_height="0dp"
+            android:background="#402196F3"
+            android:visibility="gone"
+            app:layout_constraintBottom_toBottomOf="parent"
+            app:layout_constraintEnd_toEndOf="parent"
+            app:layout_constraintStart_toStartOf="parent"
+            app:layout_constraintTop_toTopOf="parent">
+        </FrameLayout>
 
     </androidx.constraintlayout.widget.ConstraintLayout>
 

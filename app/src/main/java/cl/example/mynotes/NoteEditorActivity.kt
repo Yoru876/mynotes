@@ -607,13 +607,37 @@ class NoteEditorActivity : AppCompatActivity() {
     }
 
     private fun actualizarEstiloTexto(esFondoOscuro: Boolean) {
-        val textColor = if (esFondoOscuro) Color.WHITE else Color.BLACK
-        val hintColor = if (esFondoOscuro) Color.LTGRAY else Color.GRAY
-        etTitle.setTextColor(textColor)
-        etTitle.setHintTextColor(hintColor)
-        etContent.setTextColor(textColor)
-        etContent.setHintTextColor(hintColor)
-        tvDateLabel.setTextColor(hintColor)
+        val colorTexto = if (esFondoOscuro) Color.WHITE else Color.BLACK
+        val colorHint = if (esFondoOscuro) Color.LTGRAY else Color.GRAY
+
+        // 1. Aplicar a Título
+        etTitle.setTextColor(colorTexto)
+        etTitle.setHintTextColor(colorHint)
+        etTitle.setCursorColor(colorTexto)
+
+        // 2. Aplicar a Contenido
+        etContent.setTextColor(colorTexto)
+        etContent.setHintTextColor(colorHint)
+        etContent.setCursorColor(colorTexto)
+
+        // 3. Etiqueta de fecha
+        tvDateLabel.setTextColor(colorHint)
+
+        // 4. BOTONES DE LA BARRA SUPERIOR
+        // Aplicamos clearColorFilter() a TODOS para respetar sus diseños originales
+        // y evitar que se pongan planos (blancos/negros).
+
+        btnBack.clearColorFilter()
+        btnSave.clearColorFilter()
+        btnToggleChecklist.clearColorFilter()
+        btnChangeBackground.clearColorFilter()
+
+        // 5. Actualizar Checklist (si está activo)
+        // Aquí SÍ mantenemos el cambio de color, porque las letras y checks
+        // de la lista suelen necesitar contraste para leerse.
+        if (isChecklistMode) {
+            checklistAdapter.updateTextColor(colorTexto)
+        }
     }
 
     private fun isColorDark(color: Int): Boolean {
@@ -692,5 +716,20 @@ class NoteEditorActivity : AppCompatActivity() {
             }
             withContext(Dispatchers.Main) { finish() }
         }
+    }
+}
+
+fun EditText.setCursorColor(color: Int) {
+    // Solo funciona de forma nativa en Android 10 (Q) o superior
+    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+        val filter = android.graphics.PorterDuffColorFilter(color, android.graphics.PorterDuff.Mode.SRC_IN)
+
+        // Teñir el cursor parpadeante
+        textCursorDrawable?.colorFilter = filter
+
+        // Teñir las "gotas" o agarraderas de selección (izquierda, derecha y centro)
+        textSelectHandle?.colorFilter = filter
+        textSelectHandleLeft?.colorFilter = filter
+        textSelectHandleRight?.colorFilter = filter
     }
 }

@@ -1,6 +1,10 @@
 package cl.example.mynotes
 
 import android.content.Context
+import android.graphics.Color
+import android.graphics.PorterDuff
+import android.graphics.PorterDuffColorFilter
+import android.os.Build
 import android.text.Editable
 import android.text.TextWatcher
 import android.view.Gravity
@@ -30,6 +34,9 @@ class ChecklistAdapter(
     private val onStartDrag: (RecyclerView.ViewHolder) -> Unit
 ) : RecyclerView.Adapter<ChecklistAdapter.ViewHolder>() {
 
+    // Variable para controlar el color dinámico (por defecto negro)
+    private var currentTextColor: Int = Color.BLACK
+
     class ViewHolder(view: View) : RecyclerView.ViewHolder(view) {
         val btnCheck: ImageButton = view.findViewById(R.id.btn_check_toggle)
         val editText: EditText = view.findViewById(R.id.item_text)
@@ -47,12 +54,26 @@ class ChecklistAdapter(
         val item = items[position]
         val context = holder.itemView.context
 
-        // 1. Estados visuales básicos (Icono y Tachado)
+        // --- APARIENCIA DINÁMICA (NUEVO) ---
+        // 1. Aplicar color al texto
+        holder.editText.setTextColor(currentTextColor)
+
+        // 2. Aplicar color al cursor y manijas (usando la función auxiliar de abajo)
+        holder.editText.setCursorColor(currentTextColor)
+
+        // 3. Teñir los iconos (Check y Basura) para que se vean en fondo negro
+        holder.btnCheck.setColorFilter(currentTextColor)
+        holder.btnDelete.setColorFilter(currentTextColor)
+
+
+        // --- LÓGICA ORIGINAL ---
+
+        // Estados visuales básicos (Icono y Tachado)
         actualizarIcono(holder.btnCheck, item.isChecked)
         actualizarTachado(holder.editText, item.isChecked)
         holder.editText.setText(item.text)
 
-        // 2. LÓGICA DE IMAGEN (CICLO DE TAMAÑOS + MENU ELIMINAR)
+        // LÓGICA DE IMAGEN (CICLO DE TAMAÑOS + MENU ELIMINAR)
         if (item.imageUri != null) {
             holder.itemImage.visibility = View.VISIBLE
 
@@ -109,7 +130,7 @@ class ChecklistAdapter(
             holder.itemImage.setOnLongClickListener(null)
         }
 
-        // 3. LISTENERS GENERALES
+        // LISTENERS GENERALES
 
         // Marcar / Desmarcar
         holder.btnCheck.setOnClickListener {
@@ -141,6 +162,14 @@ class ChecklistAdapter(
         holder.btnDelete.setOnClickListener {
             onDelete(holder.layoutPosition)
         }
+    }
+
+    /**
+     * MÉTODO PÚBLICO: Llama a esto desde tu Activity cuando cambie el fondo.
+     */
+    fun updateTextColor(newColor: Int) {
+        this.currentTextColor = newColor
+        notifyDataSetChanged()
     }
 
     // Menú flotante solo para borrar la imagen
@@ -178,6 +207,17 @@ class ChecklistAdapter(
     // Utilidad para convertir dp a pixeles
     private fun Int.dpToPx(context: Context): Int {
         return (this * context.resources.displayMetrics.density).toInt()
+    }
+
+    // --- EXTENSIÓN PRIVADA PARA COLOREAR EL CURSOR (Android 10+) ---
+    private fun EditText.setCursorColor(color: Int) {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+            val filter = PorterDuffColorFilter(color, PorterDuff.Mode.SRC_IN)
+            textCursorDrawable?.colorFilter = filter
+            textSelectHandle?.colorFilter = filter
+            textSelectHandleLeft?.colorFilter = filter
+            textSelectHandleRight?.colorFilter = filter
+        }
     }
 
     override fun getItemCount() = items.size

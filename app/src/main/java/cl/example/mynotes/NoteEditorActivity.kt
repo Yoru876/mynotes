@@ -156,7 +156,7 @@ class NoteEditorActivity : AppCompatActivity() {
         layoutEditor.viewTreeObserver.addOnGlobalLayoutListener(globalLayoutListener)
 
         initViews()
-        setupChecklist() // AQUI ESTABA EL ERROR: Esta función debe existir abajo
+        setupChecklist()
         setupListeners()
         setupRichTextInteractions()
 
@@ -176,44 +176,6 @@ class NoteEditorActivity : AppCompatActivity() {
         rvChecklist = findViewById(R.id.rv_checklist)
         btnAddTodoItem = findViewById(R.id.btn_add_todo_item)
         btnToggleChecklist = findViewById(R.id.btn_toggle_checklist)
-    }
-
-    // --- FUNCIÓN RECUPERADA: SETUP CHECKLIST ---
-    private fun setupChecklist() {
-        checklistAdapter = ChecklistAdapter(
-            checklistItems,
-            onDelete = { position ->
-                if (position in checklistItems.indices) {
-                    checklistItems.removeAt(position)
-                    checklistAdapter.notifyItemRemoved(position)
-                    checklistAdapter.notifyItemRangeChanged(position, checklistItems.size)
-                }
-            },
-            onStartDrag = { viewHolder -> itemTouchHelper.startDrag(viewHolder) }
-        )
-        rvChecklist.layoutManager = LinearLayoutManager(this)
-        rvChecklist.adapter = checklistAdapter
-
-        val callback = object : ItemTouchHelper.SimpleCallback(ItemTouchHelper.UP or ItemTouchHelper.DOWN, 0) {
-            override fun onMove(recyclerView: RecyclerView, viewHolder: RecyclerView.ViewHolder, target: RecyclerView.ViewHolder): Boolean {
-                val fromPos = viewHolder.bindingAdapterPosition
-                val toPos = target.bindingAdapterPosition
-                Collections.swap(checklistItems, fromPos, toPos)
-                checklistAdapter.notifyItemMoved(fromPos, toPos)
-                return true
-            }
-            override fun onSwiped(viewHolder: RecyclerView.ViewHolder, direction: Int) {}
-            override fun onSelectedChanged(viewHolder: RecyclerView.ViewHolder?, actionState: Int) {
-                super.onSelectedChanged(viewHolder, actionState)
-                if (actionState == ItemTouchHelper.ACTION_STATE_DRAG) viewHolder?.itemView?.alpha = 0.5f
-            }
-            override fun clearView(recyclerView: RecyclerView, viewHolder: RecyclerView.ViewHolder) {
-                super.clearView(recyclerView, viewHolder)
-                viewHolder.itemView.alpha = 1.0f
-            }
-        }
-        itemTouchHelper = ItemTouchHelper(callback)
-        itemTouchHelper.attachToRecyclerView(rvChecklist)
     }
 
     // --- DETECCIÓN TÁCTIL IMÁGENES ---
@@ -300,7 +262,44 @@ class NoteEditorActivity : AppCompatActivity() {
         Toast.makeText(this, "Imagen copiada. Mantén presionado y pega para mover.", Toast.LENGTH_LONG).show()
     }
 
-    // --- MANEJO DE PERMISOS ---
+    // --- SETUP LISTENERS (CON SINCRONIZACIÓN DE IMÁGENES) ---
+    private fun setupListeners() {
+        btnBack.setOnClickListener { finish() }
+        btnSave.setOnClickListener { saveNote() }
+        findViewById<ImageButton>(R.id.btn_pick_image).setOnClickListener { checkGalleryPermission(PERMISSION_REQUEST_GALLERY) }
+        btnChangeBackground.setOnClickListener { iniciarFlujoCambioFondo() }
+
+        btnToggleChecklist.setOnClickListener { toggleChecklistMode() }
+        btnAddTodoItem.setOnClickListener {
+            checklistItems.add(ChecklistItem("", false, null, 1))
+            checklistAdapter.notifyItemInserted(checklistItems.size - 1)
+            scrollContainer.postDelayed({ scrollContainer.fullScroll(View.FOCUS_DOWN) }, 100)
+        }
+
+        etContent.setOnClickListener { smartScrollToCursor() }
+
+        etContent.addTextChangedListener(object : TextWatcher {
+            override fun beforeTextChanged(s: CharSequence?, start: Int, count: Int, after: Int) {}
+            override fun onTextChanged(s: CharSequence?, start: Int, before: Int, count: Int) {
+                // AQUÍ ESTÁ LA MAGIA: Si detectamos que se pegó texto, intentamos convertir imágenes
+                // Solo si el texto cambió (count > 0)
+                if (count > 0) {
+                    RichTextHelper.syncImages(this@NoteEditorActivity, etContent)
+                }
+            }
+            override fun afterTextChanged(s: Editable?) {
+                smartScrollToCursor()
+            }
+        })
+
+        setupColorClick(R.id.color_white, "#FFFFFF")
+        setupColorClick(R.id.color_yellow, "#FFF9C4")
+        setupColorClick(R.id.color_blue, "#E3F2FD")
+        setupColorClick(R.id.color_pink, "#FCE4EC")
+        setupColorClick(R.id.color_green, "#E8F5E9")
+    }
+
+    // --- PERMISOS ---
 
     private fun checkGalleryPermission(requestCode: Int) {
         if (verificarAccesoTotal()) {
@@ -309,10 +308,7 @@ class NoteEditorActivity : AppCompatActivity() {
         }
         else if (Build.VERSION.SDK_INT >= 34 &&
             ContextCompat.checkSelfPermission(this, Manifest.permission.READ_MEDIA_VISUAL_USER_SELECTED) == PackageManager.PERMISSION_GRANTED) {
-            mostrarDialogoConfiguracion(
-                "Acceso Limitado",
-                "Has dado acceso a algunos archivos, pero para usar todas las funciones y poder hacer un correcto respaldo necesitamos acceso completo. Presiona Ir a Ajustes -> Permisos para activar los permisos."
-            )
+            mostrarDialogoConfiguracion("Acceso Limitado", "Has dado acceso a algunos archivos, pero para usar todas las funciones necesitamos acceso total. Presiona Ir a Ajustes -> Permisos para activar el permiso.")
         }
         else {
             val permission = if (Build.VERSION.SDK_INT >= 33) Manifest.permission.READ_MEDIA_IMAGES else Manifest.permission.READ_EXTERNAL_STORAGE
@@ -353,15 +349,12 @@ class NoteEditorActivity : AppCompatActivity() {
                     ContextCompat.checkSelfPermission(this, Manifest.permission.READ_MEDIA_VISUAL_USER_SELECTED) == PackageManager.PERMISSION_GRANTED
 
             if (esAccesoLimitado) {
-                mostrarDialogoConfiguracion(
-                    "Acceso Limitado",
-                    "Has dado acceso a algunos archivos, pero para usar todas las funciones y poder hacer un correcto respaldo necesitamos acceso completo. Presiona Ir a Ajustes -> Permisos para activar los permisos."
-                )
+                mostrarDialogoConfiguracion("Acceso Limitado", "Has dado acceso a algunos archivos, pero para usar todas las funciones necesitamos acceso total. Presiona Ir a Ajustes -> Permisos para activar el permiso.")
                 return
             }
 
             if (!ActivityCompat.shouldShowRequestPermissionRationale(this, permisoPrincipal)) {
-                mostrarDialogoConfiguracion("Permisos requeridos", "Has denegado ciertos accesos permanentemente. Presiona Ir a Ajustes -> Permisos para activar los permisos.")
+                mostrarDialogoConfiguracion("Permiso Requerido", "Has denegado el acceso permanentemente. Presiona Ir a Ajustes -> Permisos para habilitarlo.")
             } else {
                 Toast.makeText(this, "Permiso necesario para continuar.", Toast.LENGTH_SHORT).show()
             }
@@ -385,6 +378,8 @@ class NoteEditorActivity : AppCompatActivity() {
     }
 
     private fun iniciarFlujoCambioFondo() { checkGalleryPermission(PERMISSION_REQUEST_WALLPAPER) }
+
+    // --- UTILS ---
 
     private fun smartScrollToCursor() {
         scrollContainer.postDelayed({
@@ -415,6 +410,44 @@ class NoteEditorActivity : AppCompatActivity() {
         return top
     }
 
+    private fun setupChecklist() {
+        checklistAdapter = ChecklistAdapter(
+            checklistItems,
+            onDelete = { position ->
+                if (position in checklistItems.indices) {
+                    checklistItems.removeAt(position)
+                    checklistAdapter.notifyItemRemoved(position)
+                    checklistAdapter.notifyItemRangeChanged(position, checklistItems.size)
+                }
+            },
+            onStartDrag = { viewHolder -> itemTouchHelper.startDrag(viewHolder) }
+        )
+        rvChecklist.layoutManager = LinearLayoutManager(this)
+        rvChecklist.adapter = checklistAdapter
+
+        val callback = object : ItemTouchHelper.SimpleCallback(ItemTouchHelper.UP or ItemTouchHelper.DOWN, 0) {
+            override fun onMove(recyclerView: RecyclerView, viewHolder: RecyclerView.ViewHolder, target: RecyclerView.ViewHolder): Boolean {
+                val fromPos = viewHolder.bindingAdapterPosition
+                val toPos = target.bindingAdapterPosition
+                Collections.swap(checklistItems, fromPos, toPos)
+                checklistAdapter.notifyItemMoved(fromPos, toPos)
+                return true
+            }
+            override fun onSwiped(viewHolder: RecyclerView.ViewHolder, direction: Int) {}
+            override fun onSelectedChanged(viewHolder: RecyclerView.ViewHolder?, actionState: Int) {
+                super.onSelectedChanged(viewHolder, actionState)
+                if (actionState == ItemTouchHelper.ACTION_STATE_DRAG) viewHolder?.itemView?.alpha = 0.5f
+            }
+            override fun clearView(recyclerView: RecyclerView, viewHolder: RecyclerView.ViewHolder) {
+                super.clearView(recyclerView, viewHolder)
+                viewHolder.itemView.alpha = 1.0f
+            }
+        }
+        itemTouchHelper = ItemTouchHelper(callback)
+        itemTouchHelper.attachToRecyclerView(rvChecklist)
+    }
+
+    // --- RESTO IGUAL ---
     private fun loadNoteData() {
         if (intent.hasExtra("note_data")) {
             noteToEdit = if (Build.VERSION.SDK_INT >= 33) {
@@ -501,33 +534,6 @@ class NoteEditorActivity : AppCompatActivity() {
             etContent.setText(sb.toString())
             switchToChecklistMode(false)
         }
-    }
-
-    private fun setupListeners() {
-        btnBack.setOnClickListener { finish() }
-        btnSave.setOnClickListener { saveNote() }
-        findViewById<ImageButton>(R.id.btn_pick_image).setOnClickListener { checkGalleryPermission(PERMISSION_REQUEST_GALLERY) }
-        btnChangeBackground.setOnClickListener { iniciarFlujoCambioFondo() }
-
-        btnToggleChecklist.setOnClickListener { toggleChecklistMode() }
-        btnAddTodoItem.setOnClickListener {
-            checklistItems.add(ChecklistItem("", false, null, 1))
-            checklistAdapter.notifyItemInserted(checklistItems.size - 1)
-            scrollContainer.postDelayed({ scrollContainer.fullScroll(View.FOCUS_DOWN) }, 100)
-        }
-
-        etContent.setOnClickListener { smartScrollToCursor() }
-        etContent.addTextChangedListener(object : TextWatcher {
-            override fun beforeTextChanged(s: CharSequence?, start: Int, count: Int, after: Int) {}
-            override fun onTextChanged(s: CharSequence?, start: Int, before: Int, count: Int) {}
-            override fun afterTextChanged(s: Editable?) { smartScrollToCursor() }
-        })
-
-        setupColorClick(R.id.color_white, "#FFFFFF")
-        setupColorClick(R.id.color_yellow, "#FFF9C4")
-        setupColorClick(R.id.color_blue, "#E3F2FD")
-        setupColorClick(R.id.color_pink, "#FCE4EC")
-        setupColorClick(R.id.color_green, "#E8F5E9")
     }
 
     private fun setupColorClick(viewId: Int, colorHex: String) {

@@ -6,6 +6,7 @@ import android.graphics.BitmapFactory
 import android.graphics.drawable.BitmapDrawable
 import android.graphics.drawable.Drawable
 import android.net.Uri
+import android.text.Editable
 import android.text.Spannable
 import android.text.SpannableStringBuilder
 import android.text.style.ImageSpan
@@ -18,17 +19,13 @@ object RichTextHelper {
     private const val IMG_TAG_START = "[IMG:"
     private const val IMG_TAG_END = "]"
 
-    /**
-     * CLASE PERSONALIZADA:
-     * Fundamental para identificar nuestras imágenes y guardar su tamaño actual.
-     */
     class NotesImageSpan(
         drawable: Drawable,
         val imageUri: Uri,
-        var sizeState: Int = 1 // 0=Mini, 1=Medio (Default), 2=Grande
+        var sizeState: Int = 1 // 0=Mini, 1=Medio, 2=Full
     ) : ImageSpan(drawable)
 
-    // 1. INSERTAR IMAGEN
+    // 1. INSERTAR IMAGEN (MANUAL)
     fun insertImage(context: Context, editText: EditText, uri: Uri) {
         val cursorPosition = editText.selectionEnd
         if (cursorPosition < 0) return
@@ -36,11 +33,9 @@ object RichTextHelper {
         val tagString = " $IMG_TAG_START$uri$IMG_TAG_END "
         val spannableString = SpannableStringBuilder(tagString)
 
-        // Crear visual
         val drawable = createDrawableForState(context, uri, 1, editText.width) ?: return
         val imageSpan = NotesImageSpan(drawable, uri, 1)
 
-        // Insertar Span
         spannableString.setSpan(
             imageSpan,
             1,
@@ -53,39 +48,50 @@ object RichTextHelper {
         editText.setSelection(editText.selectionEnd)
     }
 
-    // 2. CARGAR TEXTO Y RENDERIZAR
+    // 2. CARGAR TEXTO (INICIAL)
     fun setTextWithImages(context: Context, editText: EditText, textContent: String) {
-        val spannable = SpannableStringBuilder(textContent)
-        val pattern = Pattern.compile("\\[IMG:(.*?)\\]")
-        val matcher = pattern.matcher(textContent)
+        // Ponemos el texto primero
+        editText.setText(textContent)
+        // Luego sincronizamos las imágenes sobre ese texto
+        syncImages(context, editText)
+    }
 
-        // Si el editor aun no tiene ancho, asumimos 1080p por defecto
+    // 3. SINCRONIZAR IMÁGENES (AUTOMÁTICO AL PEGAR)
+    fun syncImages(context: Context, editText: EditText) {
+        val text = editText.text
+        val pattern = Pattern.compile("\\[IMG:(.*?)\\]")
+        val matcher = pattern.matcher(text)
+
+        // Usamos un ancho seguro
         val viewWidth = if (editText.width > 0) editText.width else 1080
 
         while (matcher.find()) {
-            val uriString = matcher.group(1)
             val start = matcher.start()
             val end = matcher.end()
 
-            try {
-                val uri = Uri.parse(uriString)
-                val drawable = createDrawableForState(context, uri, 1, viewWidth)
-                if (drawable != null) {
-                    val span = NotesImageSpan(drawable, uri, 1)
-                    spannable.setSpan(span, start, end, Spannable.SPAN_EXCLUSIVE_EXCLUSIVE)
-                }
-            } catch (e: Exception) { e.printStackTrace() }
+            // Verificamos si YA tiene una imagen visual (Span)
+            val existingSpans = text.getSpans(start, end, NotesImageSpan::class.java)
+            if (existingSpans.isEmpty()) {
+                // Si no tiene imagen (es solo texto plano pegado), la creamos
+                val uriString = matcher.group(1)
+                try {
+                    val uri = Uri.parse(uriString)
+                    val drawable = createDrawableForState(context, uri, 1, viewWidth)
+                    if (drawable != null) {
+                        val span = NotesImageSpan(drawable, uri, 1)
+                        text.setSpan(span, start, end, Spannable.SPAN_EXCLUSIVE_EXCLUSIVE)
+                    }
+                } catch (e: Exception) { e.printStackTrace() }
+            }
         }
-        editText.setText(spannable)
     }
 
-    // 3. CAMBIAR TAMAÑO (RESIZE)
+    // 4. CAMBIAR TAMAÑO
     fun resizeImageSpan(context: Context, editText: EditText, span: NotesImageSpan) {
         val start = editText.text.getSpanStart(span)
         val end = editText.text.getSpanEnd(span)
         if (start == -1 || end == -1) return
 
-        // Ciclo: 1 -> 2 -> 0 -> 1...
         val newSize = (span.sizeState + 1) % 3
 
         val newDrawable = createDrawableForState(context, span.imageUri, newSize, editText.width) ?: return
@@ -99,16 +105,14 @@ object RichTextHelper {
         return text.replace(Regex("\\[IMG:.*?\\]"), " 📷 ")
     }
 
-    // --- LÓGICA DE ESCALADO ---
     private fun createDrawableForState(context: Context, uri: Uri, sizeState: Int, parentWidth: Int): Drawable? {
         return try {
             val baseBitmap = getBitmapFromUri(context, uri) ?: return null
 
-            // Definir ancho objetivo
             val targetWidth = when (sizeState) {
-                0 -> parentWidth / 4       // Mini
-                1 -> parentWidth / 2       // Medio
-                else -> (parentWidth * 0.95).toInt() // Completo
+                0 -> parentWidth / 4
+                1 -> parentWidth / 2
+                else -> (parentWidth * 0.95).toInt()
             }
 
             val ratio = baseBitmap.height.toFloat() / baseBitmap.width.toFloat()
@@ -130,7 +134,6 @@ object RichTextHelper {
 
             if (options.outWidth == -1) return null
 
-            // Cargar con factor de reducción para no saturar memoria
             val originalSize = options.outHeight.coerceAtLeast(options.outWidth)
             val ratio = if (originalSize > 1200) (originalSize / 1200) else 1
 

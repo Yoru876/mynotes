@@ -120,19 +120,19 @@
                 android:textSize="13sp"
                 tools:text="24 May 21:00" />
 
-            <EditText
+            <cl.example.mynotes.RichEditText
                 android:id="@+id/et_content"
                 android:layout_width="match_parent"
-                android:layout_height="wrap_content"
+                android:layout_height="match_parent"
                 android:background="@null"
-                android:gravity="top|start"
-                android:hint="Escribe algo..."
+                android:gravity="top"
+                android:hint="Escribe tu nota aquí..."
                 android:inputType="textCapSentences|textMultiLine"
                 android:minHeight="200dp"
-                android:textSize="16sp"
-                android:textColor="@color/white"
-                android:textColorHint="#BDBDBD"
-                android:lineHeight="24dp"/>
+                android:padding="16dp"
+                android:textColor="#1C1C1E"
+                android:textColorHint="#9E9E9E"
+                android:textSize="16sp" />
 
             <androidx.recyclerview.widget.RecyclerView
                 android:id="@+id/rv_checklist"

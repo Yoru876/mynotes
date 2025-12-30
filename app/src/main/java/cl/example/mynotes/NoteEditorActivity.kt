@@ -19,10 +19,16 @@ import android.provider.Settings
 import android.text.Editable
 import android.text.Layout
 import android.text.TextWatcher
+import android.util.AttributeSet
 import android.view.Gravity
+import android.view.HapticFeedbackConstants // Importante para la vibración
+import android.view.KeyEvent
 import android.view.MotionEvent
 import android.view.View
 import android.view.ViewTreeObserver
+import android.view.inputmethod.EditorInfo
+import android.view.inputmethod.InputConnection
+import android.view.inputmethod.InputConnectionWrapper
 import android.widget.Button
 import android.widget.EditText
 import android.widget.ImageButton
@@ -33,6 +39,7 @@ import android.widget.Toast
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.appcompat.app.AlertDialog
 import androidx.appcompat.app.AppCompatActivity
+import androidx.appcompat.widget.AppCompatEditText
 import androidx.core.app.ActivityCompat
 import androidx.core.content.ContextCompat
 import androidx.core.view.ViewCompat
@@ -59,43 +66,41 @@ import java.util.Locale
 
 class NoteEditorActivity : AppCompatActivity() {
 
-    // Vistas principales
     private lateinit var etTitle: EditText
-    private lateinit var etContent: RichEditText // Usa la clase del archivo separado
+    private lateinit var etContent: RichEditText
     private lateinit var layoutEditor: View
     private lateinit var tvDateLabel: TextView
     private lateinit var scrollContainer: NestedScrollView
 
-    // Vistas Checklist
     private lateinit var rvChecklist: RecyclerView
     private lateinit var btnAddTodoItem: Button
     private lateinit var btnToggleChecklist: ImageButton
 
-    // Vistas de Fondo
     private lateinit var ivBackground: ImageView
     private lateinit var viewOverlay: View
     private lateinit var btnChangeBackground: ImageButton
     private lateinit var btnBack: ImageButton
     private lateinit var btnSave: ImageButton
 
-    // Variables de datos
     private var noteToEdit: Note? = null
     private var selectedColor: String = "#FFFFFF"
     private var currentBackgroundUri: String? = null
 
-    // Variables Checklist
     private var isChecklistMode = false
     private val checklistItems = mutableListOf<ChecklistItem>()
     private lateinit var checklistAdapter: ChecklistAdapter
     private lateinit var itemTouchHelper: ItemTouchHelper
     private val gson = Gson()
 
+    // Variables para guardar la posición del toque
+    private var lastTouchX: Float = 0f
+    private var lastTouchY: Float = 0f
+
     private val db by lazy { NotesDatabase.getDatabase(this) }
 
     private val PERMISSION_REQUEST_GALLERY = 200
     private val PERMISSION_REQUEST_WALLPAPER = 201
 
-    // Lanzadores
     private val pickImageLauncher = registerForActivityResult(ActivityResultContracts.StartActivityForResult()) { result ->
         if (result.resultCode == Activity.RESULT_OK && result.data?.data != null) {
             val uri = result.data!!.data!!
@@ -178,47 +183,68 @@ class NoteEditorActivity : AppCompatActivity() {
         btnToggleChecklist = findViewById(R.id.btn_toggle_checklist)
     }
 
+    // --- DETECCIÓN TÁCTIL MEJORADA (LONG PRESS SIN SISTEMA) ---
     private fun setupRichTextInteractions() {
+        // 1. Guardamos las coordenadas cuando el usuario toca la pantalla
         etContent.setOnTouchListener { v, event ->
-            val action = event.action
-            if (action == MotionEvent.ACTION_UP || action == MotionEvent.ACTION_DOWN) {
-                val textView = v as EditText
-                val text = textView.text ?: return@setOnTouchListener false
-                val layout = textView.layout ?: return@setOnTouchListener false
+            if (event.action == MotionEvent.ACTION_DOWN) {
+                lastTouchX = event.x
+                lastTouchY = event.y
+            }
+            // Devolvemos false para permitir scroll, mover cursor, etc.
+            false
+        }
 
-                val x = event.x - textView.totalPaddingLeft + textView.scrollX
-                val y = event.y - textView.totalPaddingTop + textView.scrollY
+        // 2. Usamos el Listener nativo de Android para detectar pulsación larga
+        etContent.setOnLongClickListener { view ->
+            val text = etContent.text ?: return@setOnLongClickListener false
+            val layout = etContent.layout ?: return@setOnLongClickListener false
 
-                val spans = text.getSpans(0, text.length, RichTextHelper.NotesImageSpan::class.java)
-                val path = Path()
-                val rectF = RectF()
+            // Calculamos la posición exacta basándonos en las coordenadas guardadas
+            val x = lastTouchX.toInt() - etContent.totalPaddingLeft + etContent.scrollX
+            val y = lastTouchY.toInt() - etContent.totalPaddingTop + etContent.scrollY
 
-                for (span in spans) {
-                    val start = text.getSpanStart(span)
-                    val end = text.getSpanEnd(span)
+            val line = layout.getLineForVertical(y)
+            val offset = layout.getOffsetForHorizontal(line, x.toFloat())
 
-                    path.reset()
-                    layout.getSelectionPath(start, end, path)
-                    path.computeBounds(rectF, true)
+            // Buscamos si hay una imagen en esa posición
+            val spans = text.getSpans(offset, offset + 1, RichTextHelper.NotesImageSpan::class.java)
+            val path = Path()
+            val rectF = RectF()
 
-                    if (rectF.contains(x, y)) {
-                        if (action == MotionEvent.ACTION_DOWN) {
-                            return@setOnTouchListener true
-                        } else if (action == MotionEvent.ACTION_UP) {
-                            mostrarMenuImagenTexto(textView, span)
-                            return@setOnTouchListener true
-                        }
-                    }
+            for (span in spans) {
+                val start = text.getSpanStart(span)
+                val end = text.getSpanEnd(span)
+
+                path.reset()
+                layout.getSelectionPath(start, end, path)
+                path.computeBounds(rectF, true)
+
+                // ¿El toque largo ocurrió DENTRO de la imagen?
+                if (rectF.contains(x.toFloat(), y.toFloat())) {
+                    // Vibración para feedback táctil
+                    etContent.performHapticFeedback(HapticFeedbackConstants.LONG_PRESS)
+
+                    // Mostrar NUESTRO menú
+                    mostrarMenuImagenTexto(etContent, span)
+
+                    // IMPORTANTE: Retornamos TRUE
+                    // Esto le dice al sistema: "Ya manejé este evento, NO muestres tu menú".
+                    return@setOnLongClickListener true
                 }
             }
-            false
+
+            // Si no fue imagen, retornamos FALSE
+            // Esto permite que salga el menú de sistema (Copiar/Pegar texto normal)
+            return@setOnLongClickListener false
         }
     }
 
     private fun mostrarMenuImagenTexto(anchor: View, span: RichTextHelper.NotesImageSpan) {
         val popup = PopupMenu(this, anchor, Gravity.CENTER)
         popup.menu.add("Cambiar tamaño")
-        popup.menu.add("Cortar (Para mover)")
+        popup.menu.add("Copiar")
+        popup.menu.add("Cortar")
         popup.menu.add("Eliminar")
 
         popup.setOnMenuItemClickListener { item ->
@@ -227,8 +253,15 @@ class NoteEditorActivity : AppCompatActivity() {
                     RichTextHelper.resizeImageSpan(this, etContent, span)
                     true
                 }
-                "Cortar (Para mover)" -> {
-                    copiarYBorrarImagen(span)
+                "Copiar" -> {
+                    copiarImagenAlPortapapeles(span)
+                    Toast.makeText(this, "Imagen copiada", Toast.LENGTH_SHORT).show()
+                    true
+                }
+                "Cortar" -> {
+                    copiarImagenAlPortapapeles(span)
+                    borrarImagen(span)
+                    Toast.makeText(this, "Imagen cortada", Toast.LENGTH_SHORT).show()
                     true
                 }
                 "Eliminar" -> {
@@ -241,6 +274,13 @@ class NoteEditorActivity : AppCompatActivity() {
         popup.show()
     }
 
+    private fun copiarImagenAlPortapapeles(span: RichTextHelper.NotesImageSpan) {
+        val textRep = "[IMG:${span.imageUri}]"
+        val clipboard = getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
+        val clip = ClipData.newPlainText("Imagen Nota", textRep)
+        clipboard.setPrimaryClip(clip)
+    }
+
     private fun borrarImagen(span: RichTextHelper.NotesImageSpan) {
         etContent.text?.let { editable ->
             val start = editable.getSpanStart(span)
@@ -251,16 +291,7 @@ class NoteEditorActivity : AppCompatActivity() {
         }
     }
 
-    private fun copiarYBorrarImagen(span: RichTextHelper.NotesImageSpan) {
-        val textRep = "[IMG:${span.imageUri}]"
-        val clipboard = getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
-        val clip = ClipData.newPlainText("Imagen Nota", textRep)
-        clipboard.setPrimaryClip(clip)
-
-        borrarImagen(span)
-        Toast.makeText(this, "Imagen copiada. Mantén presionado y pega para mover.", Toast.LENGTH_LONG).show()
-    }
-
+    // --- SETUP LISTENERS ---
     private fun setupListeners() {
         btnBack.setOnClickListener { finish() }
         btnSave.setOnClickListener { saveNote() }
@@ -294,6 +325,8 @@ class NoteEditorActivity : AppCompatActivity() {
         setupColorClick(R.id.color_pink, "#FCE4EC")
         setupColorClick(R.id.color_green, "#E8F5E9")
     }
+
+    // --- PERMISOS ---
 
     private fun checkGalleryPermission(requestCode: Int) {
         if (verificarAccesoTotal()) {
@@ -355,6 +388,7 @@ class NoteEditorActivity : AppCompatActivity() {
 
             if (!ActivityCompat.shouldShowRequestPermissionRationale(this, permisoPrincipal)) {
                 mostrarDialogoConfiguracion("Permisos requeridos", "Has denegado ciertos accesos permanentemente. Presiona Ir a Ajustes -> Permisos para activar los permisos.")
+
             } else {
                 Toast.makeText(this, "Permiso necesario para continuar.", Toast.LENGTH_SHORT).show()
             }
@@ -378,6 +412,8 @@ class NoteEditorActivity : AppCompatActivity() {
     }
 
     private fun iniciarFlujoCambioFondo() { checkGalleryPermission(PERMISSION_REQUEST_WALLPAPER) }
+
+    // --- UTILS ---
 
     private fun smartScrollToCursor() {
         scrollContainer.postDelayed({
@@ -445,6 +481,7 @@ class NoteEditorActivity : AppCompatActivity() {
         itemTouchHelper.attachToRecyclerView(rvChecklist)
     }
 
+    // --- RESTO IGUAL ---
     private fun loadNoteData() {
         if (intent.hasExtra("note_data")) {
             noteToEdit = if (Build.VERSION.SDK_INT >= 33) {

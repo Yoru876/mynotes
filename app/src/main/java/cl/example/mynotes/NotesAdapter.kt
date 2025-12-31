@@ -12,7 +12,7 @@ import androidx.recyclerview.widget.ListAdapter
 import androidx.recyclerview.widget.RecyclerView
 import com.bumptech.glide.Glide
 import com.bumptech.glide.load.resource.drawable.DrawableTransitionOptions
-import com.google.android.material.card.MaterialCardView // IMPORTANTE: Usar MaterialCardView
+import com.google.android.material.card.MaterialCardView
 import com.google.gson.Gson
 import com.google.gson.reflect.TypeToken
 
@@ -72,10 +72,7 @@ class NotesAdapter(
         private val titleTv: TextView = itemView.findViewById(R.id.tv_item_title)
         private val contentTv: TextView = itemView.findViewById(R.id.tv_item_content)
         private val dateTv: TextView = itemView.findViewById(R.id.tv_item_date)
-
-        // CORRECCIÓN AQUÍ: Definir como MaterialCardView para acceder a strokeWidth/Color
         private val card: MaterialCardView = itemView.findViewById(R.id.note_card_root)
-
         private val ivBackground: ImageView = itemView.findViewById(R.id.iv_note_background)
         private val viewOverlay: View = itemView.findViewById(R.id.view_overlay)
         private val selectionOverlay: FrameLayout = itemView.findViewById(R.id.view_selection_overlay)
@@ -106,6 +103,7 @@ class NotesAdapter(
 
             if (!backgroundInfo.isNullOrEmpty()) {
                 if (backgroundInfo.startsWith("content://") || backgroundInfo.startsWith("file://")) {
+                    // IMAGEN: Mostramos overlay oscuro para legibilidad
                     ivBackground.visibility = View.VISIBLE
                     viewOverlay.visibility = View.VISIBLE
                     Glide.with(itemView.context)
@@ -113,9 +111,11 @@ class NotesAdapter(
                         .centerCrop()
                         .transition(DrawableTransitionOptions.withCrossFade())
                         .into(ivBackground)
+
                     card.setCardBackgroundColor(Color.BLACK)
-                    aplicarColoresTexto(true)
+                    aplicarColoresTexto(true) // Texto blanco
                 } else {
+                    // COLOR PLANO
                     try {
                         val colorInt = Color.parseColor(backgroundInfo)
                         card.setCardBackgroundColor(colorInt)
@@ -130,14 +130,19 @@ class NotesAdapter(
                 aplicarColoresTexto(false)
             }
 
-            // 3. ESTADO DE SELECCIÓN (Ahora sí funcionará strokeWidth)
+            // 3. BORDES Y SELECCIÓN (MODIFICADO)
             if (isSelected) {
                 selectionOverlay.visibility = View.VISIBLE
-                card.strokeWidth = 6
+
+                // Seleccionado: Borde grueso y azul (3dp)
+                card.strokeWidth = dpToPx(3)
                 card.strokeColor = Color.parseColor("#2196F3")
             } else {
                 selectionOverlay.visibility = View.GONE
-                card.strokeWidth = 0
+
+                // Normal: Borde fino y gris (1dp) para separación visual elegante
+                card.strokeWidth = dpToPx(1)
+                card.strokeColor = Color.parseColor("#BDBDBD")
             }
 
             // 4. LISTENERS
@@ -153,6 +158,11 @@ class NotesAdapter(
                 longClickListener(note)
                 true
             }
+        }
+
+        // FUNCIÓN AUXILIAR: Convertir DP a Pixeles para consistencia visual
+        private fun dpToPx(dp: Int): Int {
+            return (dp * itemView.context.resources.displayMetrics.density).toInt()
         }
 
         private fun generarVistaPreviaChecklist(json: String): String {

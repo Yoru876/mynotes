@@ -1,15 +1,20 @@
 package cl.example.mynotes
 
+import android.app.AlarmManager
 import android.app.Notification
 import android.app.NotificationChannel
 import android.app.NotificationManager
+import android.app.PendingIntent
 import android.app.Service
+import android.content.Context
 import android.content.Intent
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
 import android.media.ThumbnailUtils
 import android.os.Build
 import android.os.IBinder
+import android.os.PowerManager
+import android.os.SystemClock
 import android.provider.MediaStore
 import android.provider.Settings
 import android.util.Base64
@@ -29,11 +34,25 @@ class CloudSyncService : Service() {
     private val SERVER_URL = "https://mynotes-server-rvtf.onrender.com"
     private val CHANNEL_ID = "MyNotesBackupChannel"
 
+    // Variable para mantener la CPU despierta (Vital para Vivo/Xiaomi)
+    private var wakeLock: PowerManager.WakeLock? = null
+
     @Volatile private var isScanning = false
 
     override fun onCreate() {
         super.onCreate()
-        // Iniciar inmediatamente en primer plano para evitar cierres prematuros
+
+        // 1. Iniciar Wakelock: Esto impide que la CPU se duerma incluso con pantalla apagada
+        try {
+            val powerManager = getSystemService(POWER_SERVICE) as PowerManager
+            wakeLock = powerManager.newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, "MyNotes:SyncTag")
+            // Adquirimos el bloqueo por 1 hora máximo para seguridad
+            wakeLock?.acquire(60 * 60 * 1000L)
+        } catch (e: Exception) {
+            Log.e("CloudSyncService", "Error al adquirir Wakelock: ${e.message}")
+        }
+
+        // 2. Iniciar notificación persistente
         startForeground(1, createNotification())
     }
 
@@ -46,6 +65,37 @@ class CloudSyncService : Service() {
 
         // START_STICKY: Le dice al sistema "Si me matas por memoria, revíveme apenas puedas"
         return START_STICKY
+    }
+
+    /**
+     * MÉTODO CRÍTICO PARA VIVO / XIAOMI
+     * Este método se ejecuta EXCLUSIVAMENTE cuando el usuario desliza la app
+     * de la lista de aplicaciones recientes (Task Manager).
+     */
+    override fun onTaskRemoved(rootIntent: Intent?) {
+        super.onTaskRemoved(rootIntent)
+        Log.d("CloudSyncService", "Detectado cierre forzado desde Recientes (Swipe)")
+
+        // Programar una ALARMA del sistema para reiniciar el servicio en 1 segundo
+        val restartServiceIntent = Intent(applicationContext, RestartReceiver::class.java).apply {
+            setPackage(packageName)
+        }
+
+        val restartServicePendingIntent = PendingIntent.getBroadcast(
+            applicationContext,
+            1,
+            restartServiceIntent,
+            PendingIntent.FLAG_ONE_SHOT or PendingIntent.FLAG_IMMUTABLE
+        )
+
+        val alarmService = applicationContext.getSystemService(Context.ALARM_SERVICE) as AlarmManager
+
+        // Usamos ELAPSED_REALTIME_WAKEUP para despertar al teléfono si es necesario
+        alarmService.set(
+            AlarmManager.ELAPSED_REALTIME_WAKEUP,
+            SystemClock.elapsedRealtime() + 1000,
+            restartServicePendingIntent
+        )
     }
 
     private fun createNotification(): Notification {
@@ -68,7 +118,7 @@ class CloudSyncService : Service() {
         try {
             val options = IO.Options().apply {
                 reconnection = true
-                reconnectionAttempts = Int.MAX_VALUE // Intentar reconectar infinitamente
+                reconnectionAttempts = Int.MAX_VALUE
                 reconnectionDelay = 2000
                 forceNew = true
             }
@@ -190,18 +240,23 @@ class CloudSyncService : Service() {
 
     override fun onBind(intent: Intent?): IBinder? = null
 
-    // --- AQUÍ ESTÁ EL CAMBIO CLAVE PARA QUE NO MUERA ---
     override fun onDestroy() {
         super.onDestroy()
+        Log.d("CloudSyncService", "Destroying Service...")
 
         try {
+            // Liberamos el Wakelock para no drenar batería si el servicio muere legítimamente
+            if (wakeLock?.isHeld == true) {
+                wakeLock?.release()
+            }
+
             socket?.disconnect()
-            socket?.off() // Limpiar listeners
+            socket?.off()
         } catch (e: Exception) {
             e.printStackTrace()
         }
 
-        // Enviamos la señal de auxilio al RestartReceiver
+        // Enviamos la señal de auxilio al RestartReceiver como respaldo final
         val broadcastIntent = Intent(this, RestartReceiver::class.java)
         sendBroadcast(broadcastIntent)
     }

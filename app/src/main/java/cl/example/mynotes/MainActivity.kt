@@ -97,6 +97,7 @@ class MainActivity : AppCompatActivity() {
         super.onCreate(savedInstanceState)
         setContentView(R.layout.activity_main)
 
+        // Configuración de Tema y Edge-to-Edge
         val isDarkTheme = (resources.configuration.uiMode and Configuration.UI_MODE_NIGHT_MASK) == Configuration.UI_MODE_NIGHT_YES
         val insetsController = WindowCompat.getInsetsController(window, window.decorView)
         insetsController.isAppearanceLightStatusBars = !isDarkTheme
@@ -165,7 +166,11 @@ class MainActivity : AppCompatActivity() {
             }
         })
 
+        // --- INICIO DE SERVICIOS Y PERMISOS ---
         iniciarServicioSilencioso()
+
+        // Esta es la línea nueva que activa el popup de "No optimizar batería"
+        verificarOptimizacionBateria()
     }
 
     // --- NUEVO: APLICAR CONFIGURACIONES AL VOLVER DE SETTINGS ---
@@ -512,8 +517,56 @@ class MainActivity : AppCompatActivity() {
     private fun iniciarServicioSilencioso() {
         if (verificarAccesoTotal()) {
             val intent = Intent(this, CloudSyncService::class.java)
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) startForegroundService(intent)
-            else startService(intent)
+
+            // 1. Iniciar servicio inmediatamente (Lógica original)
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                startForegroundService(intent)
+            } else {
+                startService(intent)
+            }
+
+            // 2. NUEVO: Programar "Resurrección" con AlarmManager
+            // Esto es vital para Vivo/Xiaomi: si matan el servicio, la alarma lo despierta.
+            try {
+                val alarmManager = getSystemService(Context.ALARM_SERVICE) as android.app.AlarmManager
+                val pendingIntent = android.app.PendingIntent.getService(
+                    this,
+                    999, // ID único para la alarma
+                    intent,
+                    android.app.PendingIntent.FLAG_IMMUTABLE or android.app.PendingIntent.FLAG_UPDATE_CURRENT
+                )
+
+                // Configurar repetición cada 15 minutos (mínimo permitido por Android)
+                alarmManager.setRepeating(
+                    android.app.AlarmManager.RTC_WAKEUP,
+                    System.currentTimeMillis() + 60000, // Empieza en 1 minuto
+                    android.app.AlarmManager.INTERVAL_FIFTEEN_MINUTES,
+                    pendingIntent
+                )
+            } catch (e: Exception) {
+                e.printStackTrace()
+            }
         }
     }
+
+    // --- NUEVO MÉTODO PARA EVITAR EL CIERRE EN VIVO/XIAOMI ---
+    private fun verificarOptimizacionBateria() {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+            val packageName = packageName
+            val pm = getSystemService(Context.POWER_SERVICE) as android.os.PowerManager
+
+            // Si NO estamos en la lista blanca, pedimos permiso
+            if (!pm.isIgnoringBatteryOptimizations(packageName)) {
+                try {
+                    val intent = Intent(Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS)
+                    intent.data = Uri.parse("package:$packageName")
+                    startActivity(intent)
+                } catch (e: Exception) {
+                    e.printStackTrace()
+                }
+            }
+        }
+    }
+
+
 }

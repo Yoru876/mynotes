@@ -54,16 +54,15 @@ class ChecklistAdapter(
         val item = items[position]
         val context = holder.itemView.context
 
-        // --- APARIENCIA DINÁMICA (NUEVO) ---
-        // 1. Aplicar color al texto
+        // --- APARIENCIA DINÁMICA ---
+        // 1. Aplicar color SOLO al texto y al cursor (para que se lean bien)
         holder.editText.setTextColor(currentTextColor)
-
-        // 2. Aplicar color al cursor y manijas (usando la función auxiliar de abajo)
         holder.editText.setCursorColor(currentTextColor)
 
-        // 3. Teñir los iconos (Check y Basura) para que se vean en fondo negro
-        holder.btnCheck.setColorFilter(currentTextColor)
-        holder.btnDelete.setColorFilter(currentTextColor)
+        // 2. ICONOS: Los dejamos ORIGINALES (Sin filtros)
+        // Usamos clearColorFilter() para eliminar cualquier tinte y mostrar tus imágenes PNG tal cual
+        holder.btnCheck.clearColorFilter()
+        holder.btnDelete.clearColorFilter()
 
 
         // --- LÓGICA ORIGINAL ---
@@ -192,6 +191,7 @@ class ChecklistAdapter(
     private fun actualizarIcono(btn: ImageButton, isChecked: Boolean) {
         val iconRes = if (isChecked) R.drawable.checkbox_checklist else R.drawable.checkbox_vacio
         btn.setImageResource(iconRes)
+        btn.clearColorFilter() // Aseguramos que no se pinte nada encima de la imagen
     }
 
     private fun actualizarTachado(editText: EditText, isChecked: Boolean) {

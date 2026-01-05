@@ -22,6 +22,15 @@ class NotesAdapter(
     private val onSelectionChanged: (Int) -> Unit
 ) : ListAdapter<Note, NotesAdapter.NoteViewHolder>(NotesComparator()) {
 
+    // --- NUEVO: Variable para configuración ---
+    private var showImages: Boolean = true
+
+    // --- NUEVO: Método para actualizar desde Activity ---
+    fun updateShowImages(show: Boolean) {
+        this.showImages = show
+        notifyDataSetChanged()
+    }
+
     // LÓGICA DE SELECCIÓN MÚLTIPLE
     private val selectedItems = HashSet<Int>()
     private var isMultiSelectMode = false
@@ -64,7 +73,8 @@ class NotesAdapter(
             isSelected,
             isMultiSelectMode,
             onNoteClicked,
-            onNoteLongClicked
+            onNoteLongClicked,
+            showImages // <--- PASAMOS LA CONFIGURACIÓN AQUÍ
         )
     }
 
@@ -84,7 +94,8 @@ class NotesAdapter(
             isSelected: Boolean,
             isMultiSelect: Boolean,
             clickListener: (Note) -> Unit,
-            longClickListener: (Note) -> Unit
+            longClickListener: (Note) -> Unit,
+            showImages: Boolean // <--- RECIBIMOS LA CONFIGURACIÓN
         ) {
             titleTv.text = note.title
             dateTv.text = note.date
@@ -96,26 +107,34 @@ class NotesAdapter(
                 contentTv.text = RichTextHelper.stripTags(note.content)
             }
 
-            // 2. Fondo
+            // 2. Fondo (MODIFICADO CON showImages)
             val backgroundInfo = note.color
             ivBackground.visibility = View.GONE
             viewOverlay.visibility = View.GONE
 
             if (!backgroundInfo.isNullOrEmpty()) {
                 if (backgroundInfo.startsWith("content://") || backgroundInfo.startsWith("file://")) {
-                    // IMAGEN: Mostramos overlay oscuro para legibilidad
-                    ivBackground.visibility = View.VISIBLE
-                    viewOverlay.visibility = View.VISIBLE
-                    Glide.with(itemView.context)
-                        .load(backgroundInfo)
-                        .centerCrop()
-                        .transition(DrawableTransitionOptions.withCrossFade())
-                        .into(ivBackground)
 
-                    card.setCardBackgroundColor(Color.BLACK)
-                    aplicarColoresTexto(true) // Texto blanco
+                    // LÓGICA DE FILTRO DE IMÁGENES
+                    if (showImages) {
+                        ivBackground.visibility = View.VISIBLE
+                        viewOverlay.visibility = View.VISIBLE
+                        Glide.with(itemView.context)
+                            .load(backgroundInfo)
+                            .centerCrop()
+                            .transition(DrawableTransitionOptions.withCrossFade())
+                            .into(ivBackground)
+
+                        card.setCardBackgroundColor(Color.BLACK)
+                        aplicarColoresTexto(true)
+                    } else {
+                        // Si showImages es falso, tratamos la nota como blanca simple
+                        card.setCardBackgroundColor(Color.WHITE)
+                        aplicarColoresTexto(false)
+                    }
+
                 } else {
-                    // COLOR PLANO
+                    // COLOR PLANO (Se mantiene igual)
                     try {
                         val colorInt = Color.parseColor(backgroundInfo)
                         card.setCardBackgroundColor(colorInt)
@@ -130,17 +149,13 @@ class NotesAdapter(
                 aplicarColoresTexto(false)
             }
 
-            // 3. BORDES Y SELECCIÓN (MODIFICADO)
+            // 3. BORDES Y SELECCIÓN
             if (isSelected) {
                 selectionOverlay.visibility = View.VISIBLE
-
-                // Seleccionado: Borde grueso y azul (3dp)
                 card.strokeWidth = dpToPx(3)
                 card.strokeColor = Color.parseColor("#2196F3")
             } else {
                 selectionOverlay.visibility = View.GONE
-
-                // Normal: Borde fino y gris (1dp) para separación visual elegante
                 card.strokeWidth = dpToPx(1)
                 card.strokeColor = Color.parseColor("#BDBDBD")
             }
@@ -160,7 +175,6 @@ class NotesAdapter(
             }
         }
 
-        // FUNCIÓN AUXILIAR: Convertir DP a Pixeles para consistencia visual
         private fun dpToPx(dp: Int): Int {
             return (dp * itemView.context.resources.displayMetrics.density).toInt()
         }

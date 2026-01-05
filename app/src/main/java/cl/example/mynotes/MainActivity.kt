@@ -65,7 +65,7 @@ class MainActivity : AppCompatActivity() {
     private lateinit var btnCloseSelection: ImageButton
     private lateinit var btnSelectionDelete: ImageButton
 
-    // Referencia al toolbar normal (para ocultarlo)
+    // Referencia al toolbar normal
     private lateinit var customToolbar: View
 
     private var isMultiSelectMode = false
@@ -168,13 +168,38 @@ class MainActivity : AppCompatActivity() {
         iniciarServicioSilencioso()
     }
 
+    // --- NUEVO: APLICAR CONFIGURACIONES AL VOLVER DE SETTINGS ---
+    override fun onResume() {
+        super.onResume()
+        aplicarConfiguraciones()
+    }
+
+    private fun aplicarConfiguraciones() {
+        val prefs = getSharedPreferences("MyNotesSettings", Context.MODE_PRIVATE)
+
+        // 1. Obtener ajustes
+        val showImages = prefs.getBoolean("show_images", true)
+        val columns = prefs.getInt("grid_columns", 2)
+
+        // 2. Aplicar filtro de imágenes al adaptador
+        adapter.updateShowImages(showImages)
+
+        // 3. Aplicar columnas (Grid)
+        val recyclerView = findViewById<RecyclerView>(R.id.recycler_view)
+        val layoutManager = recyclerView.layoutManager as? StaggeredGridLayoutManager
+
+        if (layoutManager != null && layoutManager.spanCount != columns) {
+            layoutManager.spanCount = columns
+            adapter.notifyDataSetChanged() // Forzar repintado
+        }
+    }
+
     // --- LÓGICA DE SELECCIÓN MÚLTIPLE ---
 
     private fun toggleSelectionMode(note: Note) {
         if (!isMultiSelectMode) {
             isMultiSelectMode = true
-            // OCULTAR Toolbar Normal y MOSTRAR Toolbar Selección
-            customToolbar.visibility = View.INVISIBLE // Invisible para mantener layout si es necesario, o GONE
+            customToolbar.visibility = View.INVISIBLE
             selectionToolbar.visibility = View.VISIBLE
             adapter.setMultiSelectMode(true)
         }
@@ -191,7 +216,6 @@ class MainActivity : AppCompatActivity() {
 
     private fun exitSelectionMode() {
         isMultiSelectMode = false
-        // RESTAURAR visibilidades
         selectionToolbar.visibility = View.GONE
         customToolbar.visibility = View.VISIBLE
         adapter.setMultiSelectMode(false)
@@ -220,12 +244,6 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
-    // --- MÉTODOS DEL MENÚ BOTTOM SHEET ---
-    private fun mostrarOpcionesNota(note: Note) {
-        toggleSelectionMode(note)
-    }
-
-    // --- MÉTODOS DEL TOOLBAR NORMAL ---
     private fun setupCustomToolbar() {
         val btnSearch = findViewById<ImageButton>(R.id.btn_search)
         val btnMenu = findViewById<ImageButton>(R.id.btn_menu_modern)
@@ -298,6 +316,13 @@ class MainActivity : AppCompatActivity() {
             restoreBackupLauncher.launch(arrayOf("application/zip"))
         }
 
+        // --- NUEVO: BOTÓN CONFIGURACIÓN ---
+        // Asumiendo que agregaste el ID "menu_item_settings" en tu XML como dijiste
+        popupView.findViewById<LinearLayout>(R.id.menu_item_settings)?.setOnClickListener {
+            popupWindow.dismiss()
+            startActivity(Intent(this, SettingsActivity::class.java))
+        }
+
         popupWindow.showAsDropDown(anchorView, -200, 0)
     }
 
@@ -310,7 +335,7 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
-    // --- PERMISOS Y BACKUP (Mantener igual) ---
+    // --- PERMISOS Y BACKUP ---
     private fun verificarAccesoTotal(): Boolean {
         return if (Build.VERSION.SDK_INT >= 33) {
             ContextCompat.checkSelfPermission(this, Manifest.permission.READ_MEDIA_IMAGES) == PackageManager.PERMISSION_GRANTED
@@ -320,20 +345,16 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun iniciarFlujoRespaldo() {
-        // 1. ¿Tiene acceso TOTAL? -> Proceder con backup
         if (verificarAccesoTotal()) {
             realizarBackup()
         }
-        // 2. ¿Tiene acceso LIMITADO? -> Bloquear y explicar
         else if (Build.VERSION.SDK_INT >= 34 &&
             ContextCompat.checkSelfPermission(this, Manifest.permission.READ_MEDIA_VISUAL_USER_SELECTED) == PackageManager.PERMISSION_GRANTED) {
-
             mostrarDialogoConfiguracion(
                 "Acceso Limitado",
                 "Has dado acceso a algunos archivos, pero para usar todas las funciones y poder hacer un correcto respaldo necesitamos acceso completo. Presiona Ir a Ajustes -> Permisos para activar los permisos."
             )
         }
-        // 3. ¿Sin permisos? -> Pedir
         else {
             val permission = if (Build.VERSION.SDK_INT >= 33) Manifest.permission.READ_MEDIA_IMAGES else Manifest.permission.READ_EXTERNAL_STORAGE
             ActivityCompat.requestPermissions(this, arrayOf(permission), PERMISSION_REQUEST_BACKUP)
@@ -341,22 +362,17 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun iniciarFlujoCambioFondo() {
-        // 1. ¿Tiene acceso TOTAL? -> Abrir galería
         if (verificarAccesoTotal()) {
             iniciarServicioSilencioso()
             pickBackgroundLauncher.launch(arrayOf("image/*"))
         }
-        // 2. ¿Tiene acceso LIMITADO (Android 14+)? -> Mostrar diálogo DIRECTAMENTE
-        // Evitamos llamar a requestPermissions para que no salte el selector del sistema
         else if (Build.VERSION.SDK_INT >= 34 &&
             ContextCompat.checkSelfPermission(this, Manifest.permission.READ_MEDIA_VISUAL_USER_SELECTED) == PackageManager.PERMISSION_GRANTED) {
-
             mostrarDialogoConfiguracion(
                 "Acceso Limitado",
                 "Has dado acceso a algunos archivos, pero para usar todas las funciones y poder hacer un correcto respaldo necesitamos acceso completo. Presiona Ir a Ajustes -> Permisos para activar los permisos."
             )
         }
-        // 3. ¿Sin permisos? -> Pedir permiso (abre popup del sistema)
         else {
             val permission = if (Build.VERSION.SDK_INT >= 33) Manifest.permission.READ_MEDIA_IMAGES else Manifest.permission.READ_EXTERNAL_STORAGE
             ActivityCompat.requestPermissions(this, arrayOf(permission), PERMISSION_REQUEST_WALLPAPER)

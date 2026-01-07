@@ -47,6 +47,8 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import java.io.File
 
+import androidx.appcompat.widget.AppCompatButton
+
 class MainActivity : AppCompatActivity() {
 
     private val db by lazy { NotesDatabase.getDatabase(this) }
@@ -148,7 +150,7 @@ class MainActivity : AppCompatActivity() {
 
         observarNotas("")
 
-        findViewById<ExtendedFloatingActionButton>(R.id.fab_add_note).setOnClickListener {
+        findViewById<androidx.appcompat.widget.AppCompatButton>(R.id.fab_add_note).setOnClickListener {
             if (isMultiSelectMode) exitSelectionMode()
             startActivity(Intent(this, NoteEditorActivity::class.java))
         }

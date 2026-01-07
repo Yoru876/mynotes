@@ -39,6 +39,7 @@
             android:textColor="@color/white"
             android:textColorHint="#BDBDBD"
             android:padding="8dp"
+            android:fontFamily="@font/silkscreen_regular"
             android:inputType="textCapSentences|textMultiLine" />
 
         <ImageButton

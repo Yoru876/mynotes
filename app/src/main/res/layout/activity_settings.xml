@@ -30,6 +30,7 @@
             android:text="Configuración"
             android:textSize="20sp"
             android:textStyle="bold"
+            android:fontFamily="@font/silkscreen_regular"
             android:textColor="?attr/colorOnSurface"/>
     </LinearLayout>
 
@@ -55,6 +56,7 @@
                 android:text="Apariencia"
                 android:textColor="?attr/colorPrimary"
                 android:textStyle="bold"
+                android:fontFamily="@font/silkscreen_regular"
                 android:layout_marginBottom="16dp"/>
 
             <com.google.android.material.materialswitch.MaterialSwitch
@@ -63,6 +65,7 @@
                 android:layout_height="wrap_content"
                 android:text="Mostrar imágenes en la lista"
                 android:textSize="16sp"
+                android:fontFamily="@font/silkscreen_regular"
                 android:minHeight="48dp"/>
 
             <TextView
@@ -71,7 +74,8 @@
                 android:text="Desactívalo para una vista más compacta de solo texto."
                 android:textSize="12sp"
                 android:textColor="?attr/colorOnSurfaceVariant"
-                android:layout_marginTop="-8dp"
+                android:layout_marginTop="8dp"
+                android:fontFamily="@font/silkscreen_regular"
                 android:layout_marginBottom="24dp"/>
 
             <View
@@ -87,6 +91,7 @@
                 android:text="Tamaño de las Notas"
                 android:textColor="?attr/colorPrimary"
                 android:textStyle="bold"
+                android:fontFamily="@font/silkscreen_regular"
                 android:layout_marginBottom="16dp"/>
 
             <RadioGroup
@@ -100,6 +105,7 @@
                     android:layout_height="wrap_content"
                     android:text="Normal (2 columnas)"
                     android:paddingStart="8dp"
+                    android:fontFamily="@font/silkscreen_regular"
                     android:layout_marginBottom="8dp"/>
 
                 <RadioButton
@@ -107,6 +113,7 @@
                     android:layout_width="match_parent"
                     android:layout_height="wrap_content"
                     android:text="Grande (1 columna)"
+                    android:fontFamily="@font/silkscreen_regular"
                     android:paddingStart="8dp"/>
             </RadioGroup>
 

@@ -21,7 +21,7 @@ import android.text.Layout
 import android.text.TextWatcher
 import android.util.AttributeSet
 import android.view.Gravity
-import android.view.HapticFeedbackConstants // Importante para la vibración
+import android.view.HapticFeedbackConstants
 import android.view.KeyEvent
 import android.view.MotionEvent
 import android.view.View
@@ -549,25 +549,110 @@ class NoteEditorActivity : AppCompatActivity() {
         }
     }
 
+    // --- FUNCIÓN MODIFICADA: CONVIERTE PRESERVANDO IMÁGENES ---
+    // --- FUNCIÓN CORREGIDA: BIDIRECCIONAL (Texto <-> Checklist) ---
     private fun toggleChecklistMode() {
         if (!isChecklistMode) {
-            val textLines = etContent.text.toString().split("\n")
+            // MODO TEXTO -> MODO CHECKLIST
+            // (Esta parte ya funcionaba con la corrección anterior)
             checklistItems.clear()
-            for (line in textLines) {
-                if (line.isNotBlank()) checklistItems.add(ChecklistItem(line.trim(), false, null, 1))
-            }
+            checklistItems.addAll(convertirContenidoALista())
+
             if (checklistItems.isEmpty()) checklistItems.add(ChecklistItem("", false, null, 1))
             checklistAdapter.notifyDataSetChanged()
             switchToChecklistMode(true)
         } else {
+            // MODO CHECKLIST -> MODO TEXTO
             val sb = StringBuilder()
+
             for (item in checklistItems) {
+                // 1. Recuperar el texto (agregamos [x] si estaba completada para no perder el estado)
                 val prefix = if (item.isChecked) "[x] " else ""
                 sb.append(prefix).append(item.text).append("\n")
+
+                // 2. RECUPERAR LA IMAGEN (Esto faltaba)
+                // Si el item tiene una imagen, inyectamos la etiqueta [IMG:...]
+                // Esto permite que el RichTextHelper la reconozca y la pinte.
+                if (item.imageUri != null) {
+                    sb.append("[IMG:${item.imageUri}]\n")
+                }
             }
-            etContent.setText(sb.toString())
+
+            // 3. Renderizar Texto + Imágenes
+            // En lugar de etContent.setText(), usamos el Helper para que procese las etiquetas [IMG:...]
+            RichTextHelper.setTextWithImages(this, etContent, sb.toString())
+
             switchToChecklistMode(false)
         }
+    }
+
+    // --- NUEVA FUNCIÓN AUXILIAR PARA RESCATAR IMÁGENES DEL TEXTO ---
+    // --- FUNCIÓN CORREGIDA ---
+    // --- FUNCIÓN CORREGIDA: Detecta ImageSpans Y TAMBIÉN etiquetas de texto [IMG:...] ---
+    private fun convertirContenidoALista(): List<ChecklistItem> {
+        val text = etContent.text ?: return emptyList()
+        val rawString = text.toString() // Aquí es donde sale el "[IMG:...]"
+
+        if (rawString.isBlank()) return emptyList()
+
+        val lines = rawString.split("\n")
+        val items = mutableListOf<ChecklistItem>()
+
+        // Variable para rastrear la posición en el Spannable original
+        var currentIndex = 0
+
+        for (line in lines) {
+            var cleanText = line
+            var imageUri: String? = null
+
+            // 1. INTENTO A: Buscar ImageSpan real (Objeto en memoria)
+            // Esto es lo ideal si el EditText aún tiene los objetos vivos
+            val lineLength = line.length
+            val end = currentIndex + lineLength
+            val safeStart = if (currentIndex > text.length) text.length else currentIndex
+            val safeEnd = if (end > text.length) text.length else end
+
+            val spans = text.getSpans(safeStart, safeEnd, android.text.style.ImageSpan::class.java)
+            if (spans.isNotEmpty()) {
+                imageUri = spans[0].source
+            }
+
+            // 2. INTENTO B (LA SOLUCIÓN A TU PROBLEMA):
+            // Si no halló span, o si el texto contiene literalmente "[IMG:...]"
+            // Buscamos el patrón de texto y lo extraemos.
+            if (cleanText.contains("[IMG:")) {
+                val startTag = cleanText.indexOf("[IMG:")
+                val endTag = cleanText.indexOf("]", startTag)
+
+                if (startTag != -1 && endTag != -1 && endTag > startTag) {
+                    // Extraemos la URI que está dentro
+                    val uriString = cleanText.substring(startTag + 5, endTag) // +5 para saltar "[IMG:"
+
+                    // Si no teníamos imagen por Span, usamos esta
+                    if (imageUri == null) {
+                        imageUri = uriString
+                    }
+
+                    // IMPORTANTE: Removemos ese código feo del texto visible
+                    // Reemplazamos "[IMG:...]" por vacío
+                    val tagCompleto = cleanText.substring(startTag, endTag + 1)
+                    cleanText = cleanText.replace(tagCompleto, "")
+                }
+            }
+
+            // 3. Limpieza final
+            // Borramos el caracter de objeto (\uFFFC) y espacios extra
+            cleanText = cleanText.replace("\uFFFC", "").trim()
+
+            // Solo agregamos si quedó algo (texto o imagen)
+            if (cleanText.isNotEmpty() || imageUri != null) {
+                // Creamos el item con el texto limpio y la URI en su lugar correcto
+                items.add(ChecklistItem(cleanText, false, imageUri, 1))
+            }
+
+            currentIndex += lineLength + 1
+        }
+        return items
     }
 
     private fun setupColorClick(viewId: Int, colorHex: String) {

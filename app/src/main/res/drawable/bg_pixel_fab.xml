@@ -1,0 +1,24 @@
+<?xml version="1.0" encoding="utf-8"?>
+<ripple xmlns:android="http://schemas.android.com/apk/res/android"
+    android:color="@color/pixel_border_color"> <item>
+    <layer-list>
+        <item android:top="6dp" android:left="6dp">
+            <shape android:shape="rectangle">
+                <solid android:color="@color/pixel_border_color" />
+            </shape>
+        </item>
+
+        <item android:bottom="6dp" android:right="6dp">
+            <shape android:shape="rectangle">
+                <solid android:color="@color/pixel_border_color" />
+            </shape>
+        </item>
+
+        <item android:bottom="10dp" android:right="10dp" android:top="4dp" android:left="4dp">
+            <shape android:shape="rectangle">
+                <solid android:color="?attr/colorPrimary" />
+            </shape>
+        </item>
+    </layer-list>
+</item>
+</ripple>

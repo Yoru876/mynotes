@@ -86,7 +86,7 @@
             android:textSize="24sp"
             android:textStyle="bold"
             android:textColor="?attr/colorOnSurface"
-            android:fontFamily="sans-serif-medium"
+            android:fontFamily="@font/silkscreen_regular"
             app:layout_constraintStart_toStartOf="parent"
             app:layout_constraintTop_toTopOf="parent"
             app:layout_constraintBottom_toBottomOf="parent"/>
@@ -157,16 +157,31 @@
         app:layout_constraintTop_toBottomOf="@+id/custom_toolbar"
         app:layout_constraintBottom_toBottomOf="parent" />
 
-    <com.google.android.material.floatingactionbutton.ExtendedFloatingActionButton
+    <androidx.appcompat.widget.AppCompatButton
         android:id="@+id/fab_add_note"
         android:layout_width="wrap_content"
         android:layout_height="wrap_content"
         android:layout_margin="24dp"
+
         android:text="Nueva Nota"
         android:textColor="?attr/colorOnPrimary"
-        android:backgroundTint="?attr/colorPrimary"
-        app:icon="@android:drawable/ic_input_add"
-        app:iconTint="?attr/colorOnPrimary"
+        android:fontFamily="@font/silkscreen_regular"
+        android:textSize="18sp"
+
+        android:drawableStart="@android:drawable/ic_input_add"
+        android:drawableTint="?attr/colorOnPrimary"
+        android:drawablePadding="12dp"
+
+        android:background="@drawable/bg_pixel_fab"
+
+        android:stateListAnimator="@null"
+        android:elevation="0dp"
+
+        android:paddingStart="16dp"
+        android:paddingTop="16dp"
+        android:paddingEnd="26dp"
+        android:paddingBottom="16dp"
+
         app:layout_constraintBottom_toBottomOf="parent"
         app:layout_constraintEnd_toEndOf="parent" />
 

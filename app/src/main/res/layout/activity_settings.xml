@@ -21,8 +21,6 @@
             android:src="@drawable/ic_custom_back"
             android:scaleType="centerInside" />
 
-
-
         <TextView
             android:layout_width="wrap_content"
             android:layout_height="wrap_content"
@@ -30,7 +28,6 @@
             android:text="Configuración"
             android:textSize="20sp"
             android:textStyle="bold"
-            android:fontFamily="@font/silkscreen_regular"
             android:textColor="?attr/colorOnSurface"/>
     </LinearLayout>
 
@@ -53,45 +50,99 @@
             <TextView
                 android:layout_width="wrap_content"
                 android:layout_height="wrap_content"
-                android:text="Apariencia"
+                android:text="Visualización"
                 android:textColor="?attr/colorPrimary"
                 android:textStyle="bold"
-                android:fontFamily="@font/silkscreen_regular"
                 android:layout_marginBottom="16dp"/>
 
             <com.google.android.material.materialswitch.MaterialSwitch
                 android:id="@+id/switch_show_images"
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
-                android:text="Mostrar imágenes en la lista"
+                android:text="Mostrar imágenes"
                 android:textSize="16sp"
-                android:fontFamily="@font/silkscreen_regular"
                 android:minHeight="48dp"/>
 
             <TextView
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
-                android:text="Desactívalo para una vista más compacta de solo texto."
+                android:text="Desactívalo para una vista compacta."
                 android:textSize="12sp"
                 android:textColor="?attr/colorOnSurfaceVariant"
-                android:layout_marginTop="8dp"
-                android:fontFamily="@font/silkscreen_regular"
+                android:layout_marginTop="4dp"
                 android:layout_marginBottom="24dp"/>
 
-            <View
-                android:layout_width="match_parent"
-                android:layout_height="1dp"
-                android:background="?attr/colorOutline"
-                android:alpha="0.2"
-                android:layout_marginBottom="24dp"/>
+            <View android:layout_width="match_parent" android:layout_height="1dp" android:background="?attr/colorOutline" android:alpha="0.2" android:layout_marginBottom="24dp"/>
 
             <TextView
                 android:layout_width="wrap_content"
                 android:layout_height="wrap_content"
-                android:text="Tamaño de las Notas"
+                android:text="Tipografía"
                 android:textColor="?attr/colorPrimary"
                 android:textStyle="bold"
-                android:fontFamily="@font/silkscreen_regular"
+                android:layout_marginBottom="16dp"/>
+
+            <LinearLayout
+                android:id="@+id/btn_font_pixel"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:padding="8dp"
+                android:background="@drawable/bg_pixel_card"
+                android:orientation="horizontal"
+                android:layout_marginBottom="12dp"
+                android:clickable="true"
+                android:focusable="true">
+                <TextView
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:text="Pixel Art (Original)"
+                    android:textSize="16sp"
+                    android:textColor="?attr/colorOnSurface"/>
+            </LinearLayout>
+
+            <LinearLayout
+                android:id="@+id/btn_font_system"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:padding="8dp"
+                android:background="@drawable/bg_pixel_card"
+                android:orientation="horizontal"
+                android:layout_marginBottom="12dp"
+                android:clickable="true"
+                android:focusable="true">
+                <TextView
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:text="Sistema (Legible)"
+                    android:textSize="16sp"
+                    android:textColor="?attr/colorOnSurface"/>
+            </LinearLayout>
+
+            <LinearLayout
+                android:id="@+id/btn_font_custom"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:padding="8dp"
+                android:background="@drawable/bg_pixel_card"
+                android:orientation="horizontal"
+                android:clickable="true"
+                android:focusable="true">
+                <TextView
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:text="📂 Cargar fuente (.ttf)"
+                    android:textSize="16sp"
+                    android:textColor="?attr/colorOnSurface"/>
+            </LinearLayout>
+
+            <View android:layout_width="match_parent" android:layout_height="1dp" android:background="?attr/colorOutline" android:alpha="0.2" android:layout_marginTop="24dp" android:layout_marginBottom="24dp"/>
+
+            <TextView
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:text="Diseño de Grilla"
+                android:textColor="?attr/colorPrimary"
+                android:textStyle="bold"
                 android:layout_marginBottom="16dp"/>
 
             <RadioGroup
@@ -105,7 +156,6 @@
                     android:layout_height="wrap_content"
                     android:text="Normal (2 columnas)"
                     android:paddingStart="8dp"
-                    android:fontFamily="@font/silkscreen_regular"
                     android:layout_marginBottom="8dp"/>
 
                 <RadioButton
@@ -113,7 +163,6 @@
                     android:layout_width="match_parent"
                     android:layout_height="wrap_content"
                     android:text="Grande (1 columna)"
-                    android:fontFamily="@font/silkscreen_regular"
                     android:paddingStart="8dp"/>
             </RadioGroup>
 

@@ -86,7 +86,6 @@
             android:textSize="24sp"
             android:textStyle="bold"
             android:textColor="?attr/colorOnSurface"
-            android:fontFamily="@font/silkscreen_regular"
             app:layout_constraintStart_toStartOf="parent"
             app:layout_constraintTop_toTopOf="parent"
             app:layout_constraintBottom_toBottomOf="parent"/>
@@ -165,7 +164,6 @@
 
         android:text="Nueva Nota"
         android:textColor="?attr/colorOnPrimary"
-        android:fontFamily="@font/silkscreen_regular"
         android:textSize="18sp"
 
         android:drawableStart="@android:drawable/ic_input_add"

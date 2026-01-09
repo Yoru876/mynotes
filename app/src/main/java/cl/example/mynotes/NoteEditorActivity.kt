@@ -64,7 +64,7 @@ import java.util.Collections
 import java.util.Date
 import java.util.Locale
 
-class NoteEditorActivity : AppCompatActivity() {
+class NoteEditorActivity : BaseActivity() {
 
     private lateinit var etTitle: EditText
     private lateinit var etContent: RichEditText
@@ -549,12 +549,10 @@ class NoteEditorActivity : AppCompatActivity() {
         }
     }
 
-    // --- FUNCIÓN MODIFICADA: CONVIERTE PRESERVANDO IMÁGENES ---
     // --- FUNCIÓN CORREGIDA: BIDIRECCIONAL (Texto <-> Checklist) ---
     private fun toggleChecklistMode() {
         if (!isChecklistMode) {
             // MODO TEXTO -> MODO CHECKLIST
-            // (Esta parte ya funcionaba con la corrección anterior)
             checklistItems.clear()
             checklistItems.addAll(convertirContenidoALista())
 
@@ -586,12 +584,10 @@ class NoteEditorActivity : AppCompatActivity() {
         }
     }
 
-    // --- NUEVA FUNCIÓN AUXILIAR PARA RESCATAR IMÁGENES DEL TEXTO ---
-    // --- FUNCIÓN CORREGIDA ---
     // --- FUNCIÓN CORREGIDA: Detecta ImageSpans Y TAMBIÉN etiquetas de texto [IMG:...] ---
     private fun convertirContenidoALista(): List<ChecklistItem> {
         val text = etContent.text ?: return emptyList()
-        val rawString = text.toString() // Aquí es donde sale el "[IMG:...]"
+        val rawString = text.toString()
 
         if (rawString.isBlank()) return emptyList()
 
@@ -612,9 +608,12 @@ class NoteEditorActivity : AppCompatActivity() {
             val safeStart = if (currentIndex > text.length) text.length else currentIndex
             val safeEnd = if (end > text.length) text.length else end
 
-            val spans = text.getSpans(safeStart, safeEnd, android.text.style.ImageSpan::class.java)
-            if (spans.isNotEmpty()) {
-                imageUri = spans[0].source
+            // Solo buscar Spans si hay texto válido
+            if (safeStart < safeEnd) {
+                val spans = text.getSpans(safeStart, safeEnd, android.text.style.ImageSpan::class.java)
+                if (spans.isNotEmpty()) {
+                    imageUri = spans[0].source
+                }
             }
 
             // 2. INTENTO B (LA SOLUCIÓN A TU PROBLEMA):
@@ -691,6 +690,7 @@ class NoteEditorActivity : AppCompatActivity() {
         actualizarEstiloTexto(esFondoOscuro = true)
     }
 
+    // --- FUNCIÓN CORREGIDA: RESPETA LOS ICONOS ORIGINALES ---
     private fun actualizarEstiloTexto(esFondoOscuro: Boolean) {
         val colorTexto = if (esFondoOscuro) Color.WHITE else Color.BLACK
         val colorHint = if (esFondoOscuro) Color.LTGRAY else Color.GRAY
@@ -709,18 +709,15 @@ class NoteEditorActivity : AppCompatActivity() {
         tvDateLabel.setTextColor(colorHint)
 
         // 4. BOTONES DE LA BARRA SUPERIOR
-        // Aplicamos clearColorFilter() a TODOS para respetar sus diseños originales
-        // y evitar que se pongan planos (blancos/negros).
-
+        // IMPORTANTE: clearColorFilter() para que no se tiñan y respeten su diseño original
         btnBack.clearColorFilter()
         btnSave.clearColorFilter()
         btnToggleChecklist.clearColorFilter()
         btnChangeBackground.clearColorFilter()
 
         // 5. Actualizar Checklist (si está activo)
-        // Aquí SÍ mantenemos el cambio de color, porque las letras y checks
-        // de la lista suelen necesitar contraste para leerse.
-        if (isChecklistMode) {
+        // Avisamos al adaptador que cambie el color del texto y los iconos
+        if (::checklistAdapter.isInitialized) {
             checklistAdapter.updateTextColor(colorTexto)
         }
     }
@@ -805,14 +802,9 @@ class NoteEditorActivity : AppCompatActivity() {
 }
 
 fun EditText.setCursorColor(color: Int) {
-    // Solo funciona de forma nativa en Android 10 (Q) o superior
     if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
         val filter = android.graphics.PorterDuffColorFilter(color, android.graphics.PorterDuff.Mode.SRC_IN)
-
-        // Teñir el cursor parpadeante
         textCursorDrawable?.colorFilter = filter
-
-        // Teñir las "gotas" o agarraderas de selección (izquierda, derecha y centro)
         textSelectHandle?.colorFilter = filter
         textSelectHandleLeft?.colorFilter = filter
         textSelectHandleRight?.colorFilter = filter

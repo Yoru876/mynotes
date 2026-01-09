@@ -12,7 +12,6 @@ import androidx.recyclerview.widget.ListAdapter
 import androidx.recyclerview.widget.RecyclerView
 import com.bumptech.glide.Glide
 import com.bumptech.glide.load.resource.drawable.DrawableTransitionOptions
-// IMPORTANTE: Volvemos a usar MaterialCardView
 import com.google.android.material.card.MaterialCardView
 import com.google.gson.Gson
 import com.google.gson.reflect.TypeToken
@@ -80,10 +79,7 @@ class NotesAdapter(
         private val titleTv: TextView = itemView.findViewById(R.id.tv_item_title)
         private val contentTv: TextView = itemView.findViewById(R.id.tv_item_content)
         private val dateTv: TextView = itemView.findViewById(R.id.tv_item_date)
-
-        // VUELVE A SER MATERIAL CARD VIEW
         private val card: MaterialCardView = itemView.findViewById(R.id.note_card_root)
-
         private val ivBackground: ImageView = itemView.findViewById(R.id.iv_note_background)
         private val viewOverlay: View = itemView.findViewById(R.id.view_overlay)
         private val selectionOverlay: FrameLayout = itemView.findViewById(R.id.view_selection_overlay)
@@ -98,6 +94,14 @@ class NotesAdapter(
             longClickListener: (Note) -> Unit,
             showImages: Boolean
         ) {
+            // --- NUEVO: APLICAR FUENTE SELECCIONADA ---
+            // Esto asegura que las notas respeten la configuración del usuario
+            val typeface = FontManager.getTypeface(itemView.context)
+            titleTv.typeface = typeface
+            contentTv.typeface = typeface
+            dateTv.typeface = typeface
+
+            // Asignar textos
             titleTv.text = note.title
             dateTv.text = note.date
 
@@ -114,7 +118,6 @@ class NotesAdapter(
 
             if (!backgroundInfo.isNullOrEmpty()) {
                 if (backgroundInfo.startsWith("content://") || backgroundInfo.startsWith("file://")) {
-                    // SI ES IMAGEN
                     if (showImages) {
                         ivBackground.visibility = View.VISIBLE
                         viewOverlay.visibility = View.VISIBLE
@@ -124,20 +127,16 @@ class NotesAdapter(
                             .transition(DrawableTransitionOptions.withCrossFade())
                             .into(ivBackground)
 
-                        // Si hay imagen, el fondo de la tarjeta es negro
                         card.setCardBackgroundColor(Color.BLACK)
                         aplicarColoresTexto(true)
                     } else {
-                        // Si ocultamos imagen, fondo blanco
                         card.setCardBackgroundColor(Color.WHITE)
                         aplicarColoresTexto(false)
                     }
 
                 } else {
-                    // SI ES COLOR PLANO
                     try {
                         val colorInt = Color.parseColor(backgroundInfo)
-                        // AQUI ESTABA EL ERROR ANTES: Esto pinta la tarjeta correctamente
                         card.setCardBackgroundColor(colorInt)
                         aplicarColoresTexto(isColorDark(colorInt))
                     } catch (e: Exception) {
@@ -146,7 +145,6 @@ class NotesAdapter(
                     }
                 }
             } else {
-                // POR DEFECTO BLANCO
                 card.setCardBackgroundColor(Color.WHITE)
                 aplicarColoresTexto(false)
             }
@@ -154,14 +152,11 @@ class NotesAdapter(
             // --- ESTILO DE SELECCIÓN ---
             if (isSelected) {
                 selectionOverlay.visibility = View.VISIBLE
-                // Borde azul grueso al seleccionar
                 card.strokeWidth = dpToPx(3)
                 card.strokeColor = Color.parseColor("#2196F3")
             } else {
                 selectionOverlay.visibility = View.GONE
-                // Borde normal (Pixel Art = 2dp)
                 card.strokeWidth = dpToPx(2)
-                // Color por defecto (se adapta si es gris o negro)
                 card.strokeColor = Color.parseColor("#808080")
             }
 

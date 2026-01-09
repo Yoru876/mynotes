@@ -49,7 +49,7 @@ import java.io.File
 
 import androidx.appcompat.widget.AppCompatButton
 
-class MainActivity : AppCompatActivity() {
+class MainActivity : BaseActivity() {
 
     private val db by lazy { NotesDatabase.getDatabase(this) }
     private lateinit var adapter: NotesAdapter
@@ -300,6 +300,10 @@ class MainActivity : AppCompatActivity() {
         val layoutInflater = LayoutInflater.from(this)
         val popupView = layoutInflater.inflate(R.layout.popup_menu_modern, null)
 
+        // --- ESTO ES LO NUEVO: Aplicar la fuente al menú ---
+        applyGlobalFont(popupView)
+        // --------------------------------------------------
+
         val popupWindow = PopupWindow(
             popupView,
             LinearLayout.LayoutParams.WRAP_CONTENT,
@@ -323,8 +327,6 @@ class MainActivity : AppCompatActivity() {
             restoreBackupLauncher.launch(arrayOf("application/zip"))
         }
 
-        // --- NUEVO: BOTÓN CONFIGURACIÓN ---
-        // Asumiendo que agregaste el ID "menu_item_settings" en tu XML como dijiste
         popupView.findViewById<LinearLayout>(R.id.menu_item_settings)?.setOnClickListener {
             popupWindow.dismiss()
             startActivity(Intent(this, SettingsActivity::class.java))

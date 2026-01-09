@@ -40,7 +40,6 @@
                 android:text="Cambiar Fondo"
                 android:textSize="15sp"
                 android:textColor="?attr/colorOnSurface"
-                android:fontFamily="@font/silkscreen_regular"
                 android:letterSpacing="0.01"/>
         </LinearLayout>
 
@@ -68,7 +67,6 @@
                 android:text="Crear Respaldo"
                 android:textSize="15sp"
                 android:textColor="?attr/colorOnSurface"
-                android:fontFamily="@font/silkscreen_regular"
                 android:letterSpacing="0.01"/>
         </LinearLayout>
 
@@ -96,7 +94,6 @@
                 android:text="Restaurar"
                 android:textSize="15sp"
                 android:textColor="?attr/colorOnSurface"
-                android:fontFamily="@font/silkscreen_regular"
                 android:letterSpacing="0.01"/>
         </LinearLayout>
 
@@ -124,7 +121,6 @@
                 android:text="Configuración"
                 android:textSize="15sp"
                 android:textColor="?attr/colorOnSurface"
-                android:fontFamily="@font/silkscreen_regular"
                 android:letterSpacing="0.01"/>
         </LinearLayout>
 

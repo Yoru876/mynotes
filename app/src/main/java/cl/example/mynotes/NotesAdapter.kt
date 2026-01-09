@@ -12,6 +12,7 @@ import androidx.recyclerview.widget.ListAdapter
 import androidx.recyclerview.widget.RecyclerView
 import com.bumptech.glide.Glide
 import com.bumptech.glide.load.resource.drawable.DrawableTransitionOptions
+// IMPORTANTE: Volvemos a usar MaterialCardView
 import com.google.android.material.card.MaterialCardView
 import com.google.gson.Gson
 import com.google.gson.reflect.TypeToken
@@ -22,16 +23,13 @@ class NotesAdapter(
     private val onSelectionChanged: (Int) -> Unit
 ) : ListAdapter<Note, NotesAdapter.NoteViewHolder>(NotesComparator()) {
 
-    // --- NUEVO: Variable para configuración ---
     private var showImages: Boolean = true
 
-    // --- NUEVO: Método para actualizar desde Activity ---
     fun updateShowImages(show: Boolean) {
         this.showImages = show
         notifyDataSetChanged()
     }
 
-    // LÓGICA DE SELECCIÓN MÚLTIPLE
     private val selectedItems = HashSet<Int>()
     private var isMultiSelectMode = false
 
@@ -74,7 +72,7 @@ class NotesAdapter(
             isMultiSelectMode,
             onNoteClicked,
             onNoteLongClicked,
-            showImages // <--- PASAMOS LA CONFIGURACIÓN AQUÍ
+            showImages
         )
     }
 
@@ -82,7 +80,10 @@ class NotesAdapter(
         private val titleTv: TextView = itemView.findViewById(R.id.tv_item_title)
         private val contentTv: TextView = itemView.findViewById(R.id.tv_item_content)
         private val dateTv: TextView = itemView.findViewById(R.id.tv_item_date)
+
+        // VUELVE A SER MATERIAL CARD VIEW
         private val card: MaterialCardView = itemView.findViewById(R.id.note_card_root)
+
         private val ivBackground: ImageView = itemView.findViewById(R.id.iv_note_background)
         private val viewOverlay: View = itemView.findViewById(R.id.view_overlay)
         private val selectionOverlay: FrameLayout = itemView.findViewById(R.id.view_selection_overlay)
@@ -95,27 +96,25 @@ class NotesAdapter(
             isMultiSelect: Boolean,
             clickListener: (Note) -> Unit,
             longClickListener: (Note) -> Unit,
-            showImages: Boolean // <--- RECIBIMOS LA CONFIGURACIÓN
+            showImages: Boolean
         ) {
             titleTv.text = note.title
             dateTv.text = note.date
 
-            // 1. Contenido
             if (note.content.startsWith("{checklist:true}")) {
                 contentTv.text = generarVistaPreviaChecklist(note.content)
             } else {
                 contentTv.text = RichTextHelper.stripTags(note.content)
             }
 
-            // 2. Fondo (MODIFICADO CON showImages)
+            // --- LÓGICA DE FONDO Y COLOR ---
             val backgroundInfo = note.color
             ivBackground.visibility = View.GONE
             viewOverlay.visibility = View.GONE
 
             if (!backgroundInfo.isNullOrEmpty()) {
                 if (backgroundInfo.startsWith("content://") || backgroundInfo.startsWith("file://")) {
-
-                    // LÓGICA DE FILTRO DE IMÁGENES
+                    // SI ES IMAGEN
                     if (showImages) {
                         ivBackground.visibility = View.VISIBLE
                         viewOverlay.visibility = View.VISIBLE
@@ -125,18 +124,20 @@ class NotesAdapter(
                             .transition(DrawableTransitionOptions.withCrossFade())
                             .into(ivBackground)
 
+                        // Si hay imagen, el fondo de la tarjeta es negro
                         card.setCardBackgroundColor(Color.BLACK)
                         aplicarColoresTexto(true)
                     } else {
-                        // Si showImages es falso, tratamos la nota como blanca simple
+                        // Si ocultamos imagen, fondo blanco
                         card.setCardBackgroundColor(Color.WHITE)
                         aplicarColoresTexto(false)
                     }
 
                 } else {
-                    // COLOR PLANO (Se mantiene igual)
+                    // SI ES COLOR PLANO
                     try {
                         val colorInt = Color.parseColor(backgroundInfo)
+                        // AQUI ESTABA EL ERROR ANTES: Esto pinta la tarjeta correctamente
                         card.setCardBackgroundColor(colorInt)
                         aplicarColoresTexto(isColorDark(colorInt))
                     } catch (e: Exception) {
@@ -145,28 +146,27 @@ class NotesAdapter(
                     }
                 }
             } else {
+                // POR DEFECTO BLANCO
                 card.setCardBackgroundColor(Color.WHITE)
                 aplicarColoresTexto(false)
             }
 
-            // 3. BORDES Y SELECCIÓN
+            // --- ESTILO DE SELECCIÓN ---
             if (isSelected) {
                 selectionOverlay.visibility = View.VISIBLE
+                // Borde azul grueso al seleccionar
                 card.strokeWidth = dpToPx(3)
                 card.strokeColor = Color.parseColor("#2196F3")
             } else {
                 selectionOverlay.visibility = View.GONE
-                card.strokeWidth = dpToPx(1)
-                card.strokeColor = Color.parseColor("#BDBDBD")
+                // Borde normal (Pixel Art = 2dp)
+                card.strokeWidth = dpToPx(2)
+                // Color por defecto (se adapta si es gris o negro)
+                card.strokeColor = Color.parseColor("#808080")
             }
 
-            // 4. LISTENERS
             card.setOnClickListener {
-                if (isMultiSelect) {
-                    longClickListener(note)
-                } else {
-                    clickListener(note)
-                }
+                if (isMultiSelect) longClickListener(note) else clickListener(note)
             }
 
             card.setOnLongClickListener {

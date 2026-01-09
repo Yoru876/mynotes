@@ -8,7 +8,7 @@ import android.util.Log
 
 class RestartReceiver : BroadcastReceiver() {
     override fun onReceive(context: Context, intent: Intent) {
-        Log.d("RestartReceiver", "¡Intentando revivir el servicio!")
+        Log.d("RestartReceiver", "🔄 Intentando revivir el servicio...")
 
         val serviceIntent = Intent(context, CloudSyncService::class.java)
 

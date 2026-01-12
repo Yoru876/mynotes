@@ -94,24 +94,30 @@ class NotesAdapter(
             longClickListener: (Note) -> Unit,
             showImages: Boolean
         ) {
-            // --- NUEVO: APLICAR FUENTE SELECCIONADA ---
-            // Esto asegura que las notas respeten la configuración del usuario
-            val typeface = FontManager.getTypeface(itemView.context)
-            titleTv.typeface = typeface
-            contentTv.typeface = typeface
-            dateTv.typeface = typeface
+            // --- APLICAR FUENTE (Tu código original) ---
+            try {
+                // Envuelto en try-catch por si FontManager no está inicializado
+                val typeface = FontManager.getTypeface(itemView.context)
+                titleTv.typeface = typeface
+                contentTv.typeface = typeface
+                dateTv.typeface = typeface
+            } catch (e: Exception) { }
 
             // Asignar textos
             titleTv.text = note.title
             dateTv.text = note.date
 
+            // --- AQUÍ ESTÁ EL CAMBIO CLAVE ---
+            // Detectamos qué tipo de nota es para mostrar la vista previa correcta
             if (note.content.startsWith("{checklist:true}")) {
                 contentTv.text = generarVistaPreviaChecklist(note.content)
             } else {
-                contentTv.text = RichTextHelper.stripTags(note.content)
+                // Aquí usamos la nueva función que lee JSON de Bloques
+                contentTv.text = parseBlockContentForPreview(note.content)
             }
+            // --------------------------------
 
-            // --- LÓGICA DE FONDO Y COLOR ---
+            // --- LÓGICA DE FONDO Y COLOR (Tu código original intacto) ---
             val backgroundInfo = note.color
             ivBackground.visibility = View.GONE
             viewOverlay.visibility = View.GONE
@@ -149,7 +155,7 @@ class NotesAdapter(
                 aplicarColoresTexto(false)
             }
 
-            // --- ESTILO DE SELECCIÓN ---
+            // --- ESTILO DE SELECCIÓN (Tu código original) ---
             if (isSelected) {
                 selectionOverlay.visibility = View.VISIBLE
                 card.strokeWidth = dpToPx(3)
@@ -172,6 +178,49 @@ class NotesAdapter(
 
         private fun dpToPx(dp: Int): Int {
             return (dp * itemView.context.resources.displayMetrics.density).toInt()
+        }
+
+        // --- NUEVA FUNCIÓN: Traduce el JSON de bloques a texto plano para el preview  ---
+        private fun parseBlockContentForPreview(content: String): String {
+            // 1. Si es formato antiguo (texto plano sin corchetes), devolver tal cual
+            if (!content.trim().startsWith("[")) {
+                return content // O RichTextHelper.stripTags(content) si aún lo usas
+            }
+
+            // 2. Si es formato nuevo (JSON de bloques)
+            return try {
+                val listType = object : TypeToken<List<Map<String, Any>>>() {}.type
+                val blocks: List<Map<String, Any>> = gson.fromJson(content, listType)
+
+                val sb = StringBuilder()
+                var hasImages = false
+
+                for (block in blocks) {
+                    val type = block["type"] as? String
+
+                    if (type == "text") {
+                        val text = block["text"] as? String
+                        if (!text.isNullOrBlank()) {
+                            sb.append(text).append(" ")
+                        }
+                    } else if (type == "image") {
+                        hasImages = true
+                    }
+
+                    // Cortamos si es muy largo para no saturar la vista previa
+                    if (sb.length > 150) break
+                }
+
+                val finalString = sb.toString().trim()
+
+                when {
+                    finalString.isNotEmpty() -> finalString
+                    hasImages -> "📷 [Imagen]"
+                    else -> "Sin texto"
+                }
+            } catch (e: Exception) {
+                "Nota" // Fallback por si el JSON está corrupto
+            }
         }
 
         private fun generarVistaPreviaChecklist(json: String): String {

@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="utf-8"?>
+<EditText xmlns:android="http://schemas.android.com/apk/res/android"
+    android:id="@+id/et_block_text"
+    android:layout_width="match_parent"
+    android:layout_height="wrap_content"
+    android:background="@null"
+
+    android:paddingHorizontal="16dp"
+    android:paddingVertical="8dp"
+
+    android:hint="Escribe aquí..."
+    android:textSize="16sp"
+    android:inputType="textCapSentences|textMultiLine"
+    android:textColor="#1C1C1E"
+    android:textColorHint="#9E9E9E" />

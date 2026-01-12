@@ -1,0 +1,23 @@
+<?xml version="1.0" encoding="utf-8"?>
+<FrameLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:layout_width="match_parent"
+    android:layout_height="wrap_content"
+    android:padding="8dp">
+
+    <ImageView
+        android:id="@+id/iv_block_image"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:adjustViewBounds="true"
+        android:scaleType="fitCenter"
+        android:contentDescription="Imagen de la nota" />
+
+    <ImageButton
+        android:id="@+id/btn_delete_block"
+        android:layout_width="0dp"
+        android:layout_height="0dp"
+        android:background="@drawable/cancelar"
+        android:layout_gravity="top|end"
+        android:layout_margin="8dp"
+        android:padding="4dp"/>
+</FrameLayout>

@@ -1,5 +1,7 @@
 package cl.example.mynotes
 
+import android.content.ClipData
+import android.content.ClipboardManager
 import android.content.Context
 import android.graphics.Color
 import android.graphics.PorterDuff
@@ -15,6 +17,8 @@ import android.widget.EditText
 import android.widget.ImageButton
 import android.widget.ImageView
 import android.widget.PopupMenu
+import android.widget.Toast
+import androidx.core.view.ViewCompat
 import androidx.recyclerview.widget.RecyclerView
 import com.bumptech.glide.Glide
 import com.bumptech.glide.load.resource.drawable.DrawableTransitionOptions
@@ -23,7 +27,7 @@ data class ChecklistItem(
     var text: String,
     var isChecked: Boolean,
     var imageUri: String? = null,
-    var imageSizeState: Int = 1
+    var widthPercentage: Int = 100
 )
 
 class ChecklistAdapter(
@@ -32,7 +36,6 @@ class ChecklistAdapter(
     private val onStartDrag: (RecyclerView.ViewHolder) -> Unit
 ) : RecyclerView.Adapter<ChecklistAdapter.ViewHolder>() {
 
-    // Color por defecto (Negro). Se actualiza vía updateTextColor()
     private var currentTextColor: Int = Color.BLACK
 
     class ViewHolder(view: View) : RecyclerView.ViewHolder(view) {
@@ -52,94 +55,141 @@ class ChecklistAdapter(
         val item = items[position]
         val context = holder.itemView.context
 
-        // 1. INYECTAR TIPOGRAFÍA (Pixel Art / Sistema / Custom)
-        val typeface = FontManager.getTypeface(context)
-        holder.editText.typeface = typeface
+        // 1. ESTILOS (Fuentes y Colores)
+        try {
+            val typeface = FontManager.getTypeface(context)
+            holder.editText.typeface = typeface
+        } catch (e: Exception) { }
 
-        // 2. APLICAR COLOR AL TEXTO Y CURSOR
-        // Este color viene de la variable currentTextColor que definimos abajo
         holder.editText.setTextColor(currentTextColor)
         holder.editText.setCursorColor(currentTextColor)
-        holder.editText.setHintTextColor(adjustAlpha(currentTextColor, 0.5f)) // Hint un poco más transparente
+        holder.editText.setHintTextColor(adjustAlpha(currentTextColor, 0.5f))
 
-        // 3. ICONOS (Check y Borrar)
-        // IMPORTANTE: Limpiamos filtros en AMBOS para respetar tus diseños originales
         holder.btnCheck.clearColorFilter()
         holder.btnDelete.clearColorFilter()
 
-        // 4. LÓGICA VISUAL CHECK
+        // 2. ESTADO VISUAL
         actualizarIcono(holder.btnCheck, item.isChecked)
         actualizarTachado(holder.editText, item.isChecked)
 
-        // TextWatcher (Evita bucles infinitos)
+        // 3. TEXTO Y LÓGICA DE PEGADO (INTERCEPTOR + REGEX)
         if (holder.editText.tag is TextWatcher) {
             holder.editText.removeTextChangedListener(holder.editText.tag as TextWatcher)
         }
         holder.editText.setText(item.text)
 
+        // --- A. INTERCEPTOR (CAPTURA PEGADO DE IMAGEN) ---
+        val mimeTypes = arrayOf("text/*", "image/*")
+        ViewCompat.setOnReceiveContentListener(holder.editText, mimeTypes) { _, payload ->
+            val clip = payload.clip
+            if (clip.itemCount > 0) {
+                val text = clip.getItemAt(0).text?.toString()?.trim() ?: ""
+                val label = clip.description.label?.toString() ?: ""
+
+                val isImageUri = label == "Image URI" ||
+                        text.startsWith("content://") ||
+                        text.startsWith("file://")
+
+                if (isImageUri && text.isNotEmpty()) {
+                    val currentPos = holder.bindingAdapterPosition
+                    if (currentPos != RecyclerView.NO_POSITION) {
+                        items[currentPos].imageUri = text
+                        items[currentPos].widthPercentage = 100
+                        notifyItemChanged(currentPos)
+                    }
+                    return@setOnReceiveContentListener null // Bloquea el pegado del texto
+                }
+            }
+            payload
+        }
+
+        // --- B. TEXT WATCHER (PLAN B CON REGEX) ---
         val watcher = object : TextWatcher {
             override fun beforeTextChanged(s: CharSequence?, start: Int, count: Int, after: Int) {}
             override fun onTextChanged(s: CharSequence?, start: Int, before: Int, count: Int) {}
             override fun afterTextChanged(s: Editable?) {
-                if (item.text != s.toString()) item.text = s.toString()
+                val currentPos = holder.bindingAdapterPosition
+                if (currentPos != RecyclerView.NO_POSITION) {
+                    val fullText = s.toString()
+
+                    // Regex para encontrar "content://..." o "file://..." aunque haya texto antes
+                    val pattern = "(content://[^\\s]+|file://[^\\s]+)".toRegex()
+                    val match = pattern.find(fullText)
+
+                    if (match != null) {
+                        // ¡URL encontrada en el texto!
+                        val uriFound = match.value
+
+                        // Limpiamos el texto visualmente (quitamos la URL)
+                        val cleanText = fullText.replace(uriFound, "").trim()
+
+                        holder.editText.removeTextChangedListener(this)
+                        holder.editText.setText(cleanText)
+
+                        // Restauramos cursor al final si estábamos escribiendo
+                        if (holder.editText.hasFocus()) {
+                            holder.editText.setSelection(cleanText.length)
+                        }
+
+                        items[currentPos].text = cleanText
+                        holder.editText.addTextChangedListener(this)
+
+                        // Asignamos la imagen
+                        items[currentPos].imageUri = uriFound
+                        notifyItemChanged(currentPos)
+                        return
+                    }
+
+                    // Guardado normal
+                    items[currentPos].text = fullText
+                }
             }
         }
         holder.editText.addTextChangedListener(watcher)
         holder.editText.tag = watcher
 
-        // 5. IMAGEN
+        // 4. IMAGEN (VISUALIZACIÓN Y TAMAÑO)
         if (item.imageUri != null) {
             holder.itemImage.visibility = View.VISIBLE
-            val heightMini = 150.dpToPx(context)
-            val heightMedium = 300.dpToPx(context)
-            val params = holder.itemImage.layoutParams
-
-            when (item.imageSizeState) {
-                0 -> {
-                    params.height = heightMini
-                    holder.itemImage.scaleType = ImageView.ScaleType.CENTER_CROP
-                    holder.itemImage.adjustViewBounds = false
-                }
-                1 -> {
-                    params.height = heightMedium
-                    holder.itemImage.scaleType = ImageView.ScaleType.FIT_CENTER
-                    holder.itemImage.adjustViewBounds = false
-                }
-                2 -> {
-                    params.height = ViewGroup.LayoutParams.WRAP_CONTENT
-                    holder.itemImage.scaleType = ImageView.ScaleType.FIT_CENTER
-                    holder.itemImage.adjustViewBounds = true
-                }
-            }
-            holder.itemImage.layoutParams = params
 
             Glide.with(context)
                 .load(item.imageUri)
                 .transition(DrawableTransitionOptions.withCrossFade())
                 .into(holder.itemImage)
 
-            holder.itemImage.setOnClickListener {
-                item.imageSizeState = (item.imageSizeState + 1) % 3
-                notifyItemChanged(position)
-            }
+            val screenWidth = context.resources.displayMetrics.widthPixels
+            val safePercentage = if (item.widthPercentage > 0) item.widthPercentage else 100
+            val targetWidth = (screenWidth * (safePercentage / 100f)).toInt()
+            val padding = (screenWidth - targetWidth) / 2
 
+            holder.itemImage.setPadding(padding.coerceAtLeast(0), 0, padding.coerceAtLeast(0), 0)
+            holder.itemImage.adjustViewBounds = true
+            holder.itemImage.scaleType = ImageView.ScaleType.FIT_CENTER
+
+            // MENÚ CONTEXTUAL
             holder.itemImage.setOnLongClickListener { view ->
-                mostrarMenuEliminar(view, item, position)
+                val currentPos = holder.bindingAdapterPosition
+                if (currentPos != RecyclerView.NO_POSITION) {
+                    mostrarMenuImagen(view, items[currentPos], currentPos)
+                }
                 true
             }
 
         } else {
             holder.itemImage.visibility = View.GONE
             holder.itemImage.setImageDrawable(null)
-            holder.itemImage.setOnClickListener(null)
             holder.itemImage.setOnLongClickListener(null)
         }
 
-        // LISTENERS
+        // 5. CLICK LISTENERS
         holder.btnCheck.setOnClickListener {
-            item.isChecked = !item.isChecked
-            actualizarIcono(holder.btnCheck, item.isChecked)
-            actualizarTachado(holder.editText, item.isChecked)
+            val currentPos = holder.bindingAdapterPosition
+            if (currentPos != RecyclerView.NO_POSITION) {
+                val currentItem = items[currentPos]
+                currentItem.isChecked = !currentItem.isChecked
+                actualizarIcono(holder.btnCheck, currentItem.isChecked)
+                actualizarTachado(holder.editText, currentItem.isChecked)
+            }
         }
 
         holder.btnCheck.setOnLongClickListener {
@@ -148,40 +198,82 @@ class ChecklistAdapter(
         }
 
         holder.btnDelete.setOnClickListener {
-            onDelete(holder.layoutPosition)
+            val currentPos = holder.bindingAdapterPosition
+            if (currentPos != RecyclerView.NO_POSITION) {
+                onDelete(currentPos)
+            }
         }
     }
 
-    /**
-     * IMPORTANTE:
-     * Para que las letras cambien de color, DEBES llamar a esta función
-     * desde tu NoteEditorActivity cada vez que cambie el fondo.
-     */
     fun updateTextColor(newColor: Int) {
         this.currentTextColor = newColor
-        notifyDataSetChanged() // Refresca toda la lista con el nuevo color
+        notifyDataSetChanged()
     }
 
-    private fun mostrarMenuEliminar(view: View, item: ChecklistItem, position: Int) {
+    private fun mostrarMenuImagen(view: View, item: ChecklistItem, position: Int) {
         val popup = PopupMenu(view.context, view, Gravity.END)
+        popup.menu.add("Tamaño: 100%")
+        popup.menu.add("Tamaño: 75%")
+        popup.menu.add("Tamaño: 50%")
+        popup.menu.add("Copiar")
+        popup.menu.add("Cortar")
         popup.menu.add("Eliminar imagen")
+
         popup.setOnMenuItemClickListener { menuItem ->
-            if (menuItem.title == "Eliminar imagen") {
-                item.imageUri = null
-                item.imageSizeState = 1
-                notifyItemChanged(position)
-                true
-            } else {
-                false
+            val title = menuItem.title.toString()
+            when {
+                title.contains("100%") -> {
+                    item.widthPercentage = 100
+                    notifyItemChanged(position)
+                    true
+                }
+                title.contains("75%") -> {
+                    item.widthPercentage = 75
+                    notifyItemChanged(position)
+                    true
+                }
+                title.contains("50%") -> {
+                    item.widthPercentage = 50
+                    notifyItemChanged(position)
+                    true
+                }
+                title == "Copiar" -> {
+                    item.imageUri?.let { uri -> copiarImagen(view.context, uri) }
+                    true
+                }
+                title == "Cortar" -> {
+                    item.imageUri?.let { uri ->
+                        copiarImagen(view.context, uri)
+                        item.imageUri = null
+                        item.widthPercentage = 100
+                        notifyItemChanged(position)
+                        Toast.makeText(view.context, "Imagen cortada", Toast.LENGTH_SHORT).show()
+                    }
+                    true
+                }
+                title == "Eliminar imagen" -> {
+                    item.imageUri = null
+                    item.widthPercentage = 100
+                    notifyItemChanged(position)
+                    true
+                }
+                else -> false
             }
         }
         popup.show()
     }
 
+    private fun copiarImagen(context: Context, uriString: String) {
+        val clipboard = context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
+        val clip = ClipData.newPlainText("Image URI", uriString)
+        clipboard.setPrimaryClip(clip)
+        Toast.makeText(context, "Imagen copiada al portapapeles", Toast.LENGTH_SHORT).show()
+    }
+
     private fun actualizarIcono(btn: ImageButton, isChecked: Boolean) {
         val iconRes = if (isChecked) R.drawable.checkbox_checklist else R.drawable.checkbox_vacio
         btn.setImageResource(iconRes)
-        btn.clearColorFilter() // Mantiene colores originales
+        btn.clearColorFilter()
     }
 
     private fun actualizarTachado(editText: EditText, isChecked: Boolean) {
@@ -194,10 +286,6 @@ class ChecklistAdapter(
         }
     }
 
-    private fun Int.dpToPx(context: Context): Int {
-        return (this * context.resources.displayMetrics.density).toInt()
-    }
-
     private fun EditText.setCursorColor(color: Int) {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
             val filter = PorterDuffColorFilter(color, PorterDuff.Mode.SRC_IN)
@@ -208,7 +296,6 @@ class ChecklistAdapter(
         }
     }
 
-    // Función auxiliar para dar transparencia al Hint
     private fun adjustAlpha(color: Int, factor: Float): Int {
         val alpha = (Color.alpha(color) * factor).toInt()
         return Color.argb(alpha, Color.red(color), Color.green(color), Color.blue(color))

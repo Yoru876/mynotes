@@ -31,11 +31,13 @@ class NoteBlocksAdapter(
 
     sealed class Action {
         data class AddTextBlock(val position: Int) : Action()
+        data class SplitBlock(val position: Int, val textForNewBlock: String) : Action()
         data class DeleteBlock(val position: Int) : Action()
         data class MergeWithPrevious(val position: Int) : Action()
         data class FocusBlock(val position: Int) : Action()
         data class ShowImageOptions(val position: Int, val view: View) : Action()
-        data class InsertImageFromClipboard(val position: Int, val uri: String) : Action()
+        // MODIFICADO: Agregamos 'textAfter' para saber si sobró texto al pegar
+        data class InsertImageFromClipboard(val position: Int, val uri: String, val textAfter: String = "") : Action()
     }
 
     companion object {
@@ -82,53 +84,84 @@ class NoteBlocksAdapter(
 
             editText.setText(item.text)
 
-            // --- CORRECCIÓN DEL CRASH ---
-            // Android prohíbe usar "*/*". Debemos especificar "text/*" e "image/*".
+            // --- INTERCEPTOR DE PEGADO INTELIGENTE (SPLIT) ---
             val mimeTypes = arrayOf("text/*", "image/*")
-
             ViewCompat.setOnReceiveContentListener(editText, mimeTypes) { _, payload ->
                 val clip = payload.clip
                 if (clip.itemCount > 0) {
-                    val text = clip.getItemAt(0).text?.toString()?.trim() ?: ""
+                    val pastedText = clip.getItemAt(0).text?.toString()?.trim() ?: ""
                     val label = clip.description.label?.toString() ?: ""
 
-                    // Detectar si es una URI de imagen válida
+                    // Detectar si lo que se pega es una imagen (URI)
                     val isImageUri = label == "Image URI" ||
-                            text.startsWith("content://") ||
-                            text.startsWith("file://")
+                            pastedText.startsWith("content://") ||
+                            pastedText.startsWith("file://")
 
-                    if (isImageUri && text.isNotEmpty()) {
-                        onAction(Action.InsertImageFromClipboard(adapterPosition + 1, text))
-                        return@setOnReceiveContentListener null // Bloqueamos el pegado de texto
+                    if (isImageUri && pastedText.isNotEmpty()) {
+                        // 1. Calcular dónde está el cursor
+                        val cursor = editText.selectionStart.coerceAtLeast(0)
+                        val currentText = editText.text.toString()
+
+                        // 2. Dividir el texto actual: Antes y Después del cursor
+                        val textBefore = currentText.substring(0, cursor)
+                        val textAfter = currentText.substring(cursor)
+
+                        // 3. Actualizar el bloque actual solo con la parte de antes
+                        item.text = textBefore
+                        editText.setText(textBefore)
+                        editText.setSelection(textBefore.length)
+
+                        // 4. Mandar la imagen Y el texto sobrante a la Activity
+                        onAction(Action.InsertImageFromClipboard(adapterPosition + 1, pastedText, textAfter))
+
+                        return@setOnReceiveContentListener null // Bloquear pegado de texto
                     }
                 }
-                payload // Dejar pasar si no es imagen
+                payload
             }
 
+            // TEXT WATCHER (PLAN B)
             textWatcher = object : TextWatcher {
                 override fun beforeTextChanged(s: CharSequence?, start: Int, count: Int, after: Int) {}
                 override fun onTextChanged(s: CharSequence?, start: Int, before: Int, count: Int) {}
-
                 override fun afterTextChanged(s: Editable?) {
-                    val text = s.toString().trim()
+                    val fullText = s.toString()
 
-                    // Plan B: Si se pegó la URI como texto
-                    if (text.startsWith("content://") || text.startsWith("file://")) {
-                        if (!text.contains(" ") && text.length > 10) {
-                            editText.removeTextChangedListener(this)
-                            editText.setText("")
-                            item.text = ""
-                            editText.addTextChangedListener(this)
+                    // Buscar si hay una URI pegada "a la mala" en medio del texto
+                    // Regex busca "content://..." o "file://..."
+                    val pattern = "(content://[^\\s]+|file://[^\\s]+)".toRegex()
+                    val match = pattern.find(fullText)
 
-                            onAction(Action.InsertImageFromClipboard(adapterPosition + 1, text))
-                            return
-                        }
+                    if (match != null) {
+                        // Encontramos una URI sucia en el texto
+                        val uriFound = match.value
+                        val range = match.range
+
+                        // Cortamos el texto
+                        val textBefore = fullText.substring(0, range.first)
+                        val textAfter = fullText.substring(range.last + 1)
+
+                        // Limpiamos listener para evitar bucle
+                        editText.removeTextChangedListener(this)
+
+                        // Actualizamos bloque actual
+                        item.text = textBefore
+                        editText.setText(textBefore)
+
+                        // Restauramos listener
+                        editText.addTextChangedListener(this)
+
+                        // Mandamos a crear la imagen y el bloque siguiente
+                        onAction(Action.InsertImageFromClipboard(adapterPosition + 1, uriFound, textAfter))
+                        return
                     }
-                    item.text = s.toString()
+
+                    item.text = fullText
                 }
             }
             editText.addTextChangedListener(textWatcher)
 
+            // LISTENERS DE TECLADO (Enter, Delete...)
             editText.setOnKeyListener { _, keyCode, event ->
                 if (event.action == KeyEvent.ACTION_DOWN && keyCode == KeyEvent.KEYCODE_DEL) {
                     if (editText.text.isEmpty() && adapterPosition > 0) {
@@ -142,7 +175,19 @@ class NoteBlocksAdapter(
                     }
                 }
                 if (event.action == KeyEvent.ACTION_DOWN && keyCode == KeyEvent.KEYCODE_ENTER) {
-                    onAction(Action.AddTextBlock(adapterPosition + 1))
+                    val cursorPosition = editText.selectionStart
+                    val fullText = editText.text.toString()
+
+                    if (cursorPosition >= fullText.length) {
+                        onAction(Action.AddTextBlock(adapterPosition + 1))
+                    } else {
+                        val firstPart = fullText.substring(0, cursorPosition)
+                        val secondPart = fullText.substring(cursorPosition)
+                        item.text = firstPart
+                        editText.setText(firstPart)
+                        editText.setSelection(firstPart.length)
+                        onAction(Action.SplitBlock(adapterPosition + 1, secondPart))
+                    }
                     return@setOnKeyListener true
                 }
                 false

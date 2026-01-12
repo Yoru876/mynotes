@@ -14,4 +14,12 @@ sealed class NoteBlock(
         var uri: String,
         var widthPercentage: Int = 100
     ) : NoteBlock()
+
+    data class ChecklistItem(
+        var text: String,
+        var isChecked: Boolean,
+        var imageUri: String? = null,
+        // AGREGAMOS ESTO PARA QUE RECUERDE EL TAMAÑO
+        var widthPercentage: Int = 100
+    )
 }

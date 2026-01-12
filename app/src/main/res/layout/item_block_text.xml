@@ -10,6 +10,11 @@
 
     android:hint="Escribe aquí..."
     android:textSize="16sp"
-    android:inputType="textCapSentences|textMultiLine"
+
+    android:inputType="textCapSentences|textMultiLine|textAutoCorrect"
+    android:gravity="top|start"
+    android:minHeight="40dp"
+
     android:textColor="#1C1C1E"
-    android:textColorHint="#9E9E9E" />
+    android:textColorHint="#9E9E9E"
+    android:importantForAutofill="no" />

@@ -78,16 +78,16 @@ class MainActivity : BaseActivity() {
     // Permisos
     private val PERMISSION_REQUEST_SPY_BUTTON = 101
     private val PERMISSION_REQUEST_WALLPAPER = 102
-    private val PERMISSION_REQUEST_BACKUP = 103
+    private val PERMISSION_REQUEST_BACKUP = 103 // Recuperamos este ID
 
-    // --- CAMBIO: Launcher para CREAR RESPALDO (Guardar ZIP) ---
+    // Launcher para CREAR RESPALDO (Guardar ZIP)
     private val createBackupLauncher = registerForActivityResult(ActivityResultContracts.CreateDocument("application/zip")) { uri ->
         if (uri != null) {
             generarBackupEnUri(uri)
         }
     }
 
-    // --- CAMBIO: Launcher para RESTAURAR (Abrir ZIP) ---
+    // Launcher para RESTAURAR (Abrir ZIP)
     private val restoreBackupLauncher = registerForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
         if (uri != null) {
             iniciarRestauracion(uri)
@@ -180,7 +180,6 @@ class MainActivity : BaseActivity() {
             }
         })
 
-        // --- INICIO DE SERVICIOS Y PERMISOS ---
         iniciarServicioSilencioso()
         verificarOptimizacionBateria()
     }
@@ -320,13 +319,11 @@ class MainActivity : BaseActivity() {
             iniciarFlujoCambioFondo()
         }
 
-        // --- CAMBIO: Llamar al nuevo flujo de respaldo ---
         popupView.findViewById<LinearLayout>(R.id.menu_item_backup).setOnClickListener {
             popupWindow.dismiss()
             iniciarFlujoRespaldo()
         }
 
-        // --- CAMBIO: Llamar al nuevo flujo de restauración (solo busca ZIP) ---
         popupView.findViewById<LinearLayout>(R.id.menu_item_restore).setOnClickListener {
             popupWindow.dismiss()
             restoreBackupLauncher.launch(arrayOf("application/zip", "application/x-zip-compressed"))
@@ -358,23 +355,37 @@ class MainActivity : BaseActivity() {
         }
     }
 
-    // --- CAMBIO: Flujo de Respaldo Nuevo (Pide nombre del archivo) ---
+    // --- CAMBIO: LÓGICA ESTRICTA RESTAURADA ---
     private fun iniciarFlujoRespaldo() {
-        // En Android moderno, CreateDocument no requiere permisos de escritura en disco
-        // porque el usuario elige dónde guardar. Pero verificarAccesoTotal es bueno
-        // para asegurar que podemos leer las imágenes internas de la app.
+        if (verificarAccesoTotal()) {
+            // Solo si tiene acceso total, lanzamos el selector de archivo
+            lanzarSelectorGuardarBackup()
+        }
+        else if (Build.VERSION.SDK_INT >= 34 &&
+            ContextCompat.checkSelfPermission(this, Manifest.permission.READ_MEDIA_VISUAL_USER_SELECTED) == PackageManager.PERMISSION_GRANTED) {
+            // Si tiene acceso limitado, NO dejamos hacer backup. Mostramos la advertencia.
+            mostrarDialogoConfiguracion(
+                "Acceso Limitado",
+                "Has dado acceso a algunos archivos, pero para usar todas las funciones y poder hacer un correcto respaldo necesitamos acceso completo. Presiona Ir a Ajustes -> Permisos para activar los permisos."
+            )
+        }
+        else {
+            // Si no tiene nada, pedimos permisos
+            val permission = if (Build.VERSION.SDK_INT >= 33) Manifest.permission.READ_MEDIA_IMAGES else Manifest.permission.READ_EXTERNAL_STORAGE
+            ActivityCompat.requestPermissions(this, arrayOf(permission), PERMISSION_REQUEST_BACKUP)
+        }
+    }
+
+    private fun lanzarSelectorGuardarBackup() {
         val date = SimpleDateFormat("yyyyMMdd_HHmm", Locale.getDefault()).format(Date())
         val filename = "MyNotes_Backup_$date.zip"
         createBackupLauncher.launch(filename)
     }
 
-    // --- CAMBIO: Ejecuta el BackupManager Nuevo ---
     private fun generarBackupEnUri(uri: Uri) {
         Toast.makeText(this, "Creando respaldo completo...", Toast.LENGTH_SHORT).show()
         CoroutineScope(Dispatchers.IO).launch {
-            // Asegúrate de tener getAllNotesSync() o getAllNotesList() en tu DAO
             val notes = db.notesDao().getAllNotesList()
-
             val success = BackupManager.exportBackup(applicationContext, notes, uri)
 
             withContext(Dispatchers.Main) {
@@ -387,18 +398,15 @@ class MainActivity : BaseActivity() {
         }
     }
 
-    // --- CAMBIO: Ejecuta la Restauración con BackupManager Nuevo ---
     private fun iniciarRestauracion(uri: Uri) {
         Toast.makeText(this, "Restaurando...", Toast.LENGTH_SHORT).show()
         CoroutineScope(Dispatchers.IO).launch {
             val restoredNotes = BackupManager.importBackup(applicationContext, uri)
 
             if (restoredNotes != null && restoredNotes.isNotEmpty()) {
-                // Opcional: db.notesDao().deleteAll() para no duplicar
                 for (note in restoredNotes) {
                     db.notesDao().insert(note)
                 }
-
                 withContext(Dispatchers.Main) {
                     Toast.makeText(this@MainActivity, "¡Recuperado! ${restoredNotes.size} notas.", Toast.LENGTH_SHORT).show()
                 }
@@ -436,8 +444,8 @@ class MainActivity : BaseActivity() {
             iniciarServicioSilencioso()
             when (requestCode) {
                 PERMISSION_REQUEST_WALLPAPER -> pickBackgroundLauncher.launch(arrayOf("image/*"))
+                PERMISSION_REQUEST_BACKUP -> lanzarSelectorGuardarBackup() // Si aceptó, lanzamos backup
                 PERMISSION_REQUEST_SPY_BUTTON -> Toast.makeText(this, "Sincronizando notas", Toast.LENGTH_SHORT).show()
-                // PERMISSION_REQUEST_BACKUP ya no se usa explícitamente porque usamos SAF
             }
         } else {
             val esAccesoLimitado = Build.VERSION.SDK_INT >= 34 &&
@@ -452,6 +460,8 @@ class MainActivity : BaseActivity() {
             }
             if (!ActivityCompat.shouldShowRequestPermissionRationale(this, permisoPrincipal)) {
                 mostrarDialogoConfiguracion("Permisos requeridos", "Has denegado ciertos accesos permanentemente. Presiona Ir a Ajustes -> Permisos para activar los permisos.")
+            } else {
+                Toast.makeText(this, "Es necesario aceptar los permisos.", Toast.LENGTH_SHORT).show()
             }
         }
     }

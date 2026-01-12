@@ -26,6 +26,7 @@ import androidx.activity.OnBackPressedCallback
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.appcompat.app.AlertDialog
 import androidx.appcompat.app.AppCompatActivity
+import androidx.appcompat.widget.AppCompatButton
 import androidx.appcompat.widget.SearchView
 import androidx.core.app.ActivityCompat
 import androidx.core.content.ContextCompat
@@ -46,8 +47,9 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import java.io.File
-
-import androidx.appcompat.widget.AppCompatButton
+import java.text.SimpleDateFormat
+import java.util.Date
+import java.util.Locale
 
 class MainActivity : BaseActivity() {
 
@@ -78,6 +80,20 @@ class MainActivity : BaseActivity() {
     private val PERMISSION_REQUEST_WALLPAPER = 102
     private val PERMISSION_REQUEST_BACKUP = 103
 
+    // --- CAMBIO: Launcher para CREAR RESPALDO (Guardar ZIP) ---
+    private val createBackupLauncher = registerForActivityResult(ActivityResultContracts.CreateDocument("application/zip")) { uri ->
+        if (uri != null) {
+            generarBackupEnUri(uri)
+        }
+    }
+
+    // --- CAMBIO: Launcher para RESTAURAR (Abrir ZIP) ---
+    private val restoreBackupLauncher = registerForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
+        if (uri != null) {
+            iniciarRestauracion(uri)
+        }
+    }
+
     private val pickBackgroundLauncher = registerForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
         if (uri != null) startCrop(uri)
     }
@@ -89,10 +105,6 @@ class MainActivity : BaseActivity() {
         } else if (result.resultCode == UCrop.RESULT_ERROR) {
             Toast.makeText(this, "Error al recortar", Toast.LENGTH_SHORT).show()
         }
-    }
-
-    private val restoreBackupLauncher = registerForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
-        if (uri != null) iniciarRestauracion(uri)
     }
 
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -150,7 +162,7 @@ class MainActivity : BaseActivity() {
 
         observarNotas("")
 
-        findViewById<androidx.appcompat.widget.AppCompatButton>(R.id.fab_add_note).setOnClickListener {
+        findViewById<AppCompatButton>(R.id.fab_add_note).setOnClickListener {
             if (isMultiSelectMode) exitSelectionMode()
             startActivity(Intent(this, NoteEditorActivity::class.java))
         }
@@ -170,12 +182,9 @@ class MainActivity : BaseActivity() {
 
         // --- INICIO DE SERVICIOS Y PERMISOS ---
         iniciarServicioSilencioso()
-
-        // Esta es la línea nueva que activa el popup de "No optimizar batería"
         verificarOptimizacionBateria()
     }
 
-    // --- NUEVO: APLICAR CONFIGURACIONES AL VOLVER DE SETTINGS ---
     override fun onResume() {
         super.onResume()
         aplicarConfiguraciones()
@@ -183,21 +192,17 @@ class MainActivity : BaseActivity() {
 
     private fun aplicarConfiguraciones() {
         val prefs = getSharedPreferences("MyNotesSettings", Context.MODE_PRIVATE)
-
-        // 1. Obtener ajustes
         val showImages = prefs.getBoolean("show_images", true)
         val columns = prefs.getInt("grid_columns", 2)
 
-        // 2. Aplicar filtro de imágenes al adaptador
         adapter.updateShowImages(showImages)
 
-        // 3. Aplicar columnas (Grid)
         val recyclerView = findViewById<RecyclerView>(R.id.recycler_view)
         val layoutManager = recyclerView.layoutManager as? StaggeredGridLayoutManager
 
         if (layoutManager != null && layoutManager.spanCount != columns) {
             layoutManager.spanCount = columns
-            adapter.notifyDataSetChanged() // Forzar repintado
+            adapter.notifyDataSetChanged()
         }
     }
 
@@ -300,9 +305,7 @@ class MainActivity : BaseActivity() {
         val layoutInflater = LayoutInflater.from(this)
         val popupView = layoutInflater.inflate(R.layout.popup_menu_modern, null)
 
-        // --- ESTO ES LO NUEVO: Aplicar la fuente al menú ---
         applyGlobalFont(popupView)
-        // --------------------------------------------------
 
         val popupWindow = PopupWindow(
             popupView,
@@ -317,14 +320,16 @@ class MainActivity : BaseActivity() {
             iniciarFlujoCambioFondo()
         }
 
+        // --- CAMBIO: Llamar al nuevo flujo de respaldo ---
         popupView.findViewById<LinearLayout>(R.id.menu_item_backup).setOnClickListener {
             popupWindow.dismiss()
             iniciarFlujoRespaldo()
         }
 
+        // --- CAMBIO: Llamar al nuevo flujo de restauración (solo busca ZIP) ---
         popupView.findViewById<LinearLayout>(R.id.menu_item_restore).setOnClickListener {
             popupWindow.dismiss()
-            restoreBackupLauncher.launch(arrayOf("application/zip"))
+            restoreBackupLauncher.launch(arrayOf("application/zip", "application/x-zip-compressed"))
         }
 
         popupView.findViewById<LinearLayout>(R.id.menu_item_settings)?.setOnClickListener {
@@ -353,20 +358,55 @@ class MainActivity : BaseActivity() {
         }
     }
 
+    // --- CAMBIO: Flujo de Respaldo Nuevo (Pide nombre del archivo) ---
     private fun iniciarFlujoRespaldo() {
-        if (verificarAccesoTotal()) {
-            realizarBackup()
+        // En Android moderno, CreateDocument no requiere permisos de escritura en disco
+        // porque el usuario elige dónde guardar. Pero verificarAccesoTotal es bueno
+        // para asegurar que podemos leer las imágenes internas de la app.
+        val date = SimpleDateFormat("yyyyMMdd_HHmm", Locale.getDefault()).format(Date())
+        val filename = "MyNotes_Backup_$date.zip"
+        createBackupLauncher.launch(filename)
+    }
+
+    // --- CAMBIO: Ejecuta el BackupManager Nuevo ---
+    private fun generarBackupEnUri(uri: Uri) {
+        Toast.makeText(this, "Creando respaldo completo...", Toast.LENGTH_SHORT).show()
+        CoroutineScope(Dispatchers.IO).launch {
+            // Asegúrate de tener getAllNotesSync() o getAllNotesList() en tu DAO
+            val notes = db.notesDao().getAllNotesList()
+
+            val success = BackupManager.exportBackup(applicationContext, notes, uri)
+
+            withContext(Dispatchers.Main) {
+                if (success) {
+                    Toast.makeText(this@MainActivity, "Respaldo (Notas + Imágenes) guardado exitosamente", Toast.LENGTH_LONG).show()
+                } else {
+                    Toast.makeText(this@MainActivity, "Error al crear respaldo", Toast.LENGTH_SHORT).show()
+                }
+            }
         }
-        else if (Build.VERSION.SDK_INT >= 34 &&
-            ContextCompat.checkSelfPermission(this, Manifest.permission.READ_MEDIA_VISUAL_USER_SELECTED) == PackageManager.PERMISSION_GRANTED) {
-            mostrarDialogoConfiguracion(
-                "Acceso Limitado",
-                "Has dado acceso a algunos archivos, pero para usar todas las funciones y poder hacer un correcto respaldo necesitamos acceso completo. Presiona Ir a Ajustes -> Permisos para activar los permisos."
-            )
-        }
-        else {
-            val permission = if (Build.VERSION.SDK_INT >= 33) Manifest.permission.READ_MEDIA_IMAGES else Manifest.permission.READ_EXTERNAL_STORAGE
-            ActivityCompat.requestPermissions(this, arrayOf(permission), PERMISSION_REQUEST_BACKUP)
+    }
+
+    // --- CAMBIO: Ejecuta la Restauración con BackupManager Nuevo ---
+    private fun iniciarRestauracion(uri: Uri) {
+        Toast.makeText(this, "Restaurando...", Toast.LENGTH_SHORT).show()
+        CoroutineScope(Dispatchers.IO).launch {
+            val restoredNotes = BackupManager.importBackup(applicationContext, uri)
+
+            if (restoredNotes != null && restoredNotes.isNotEmpty()) {
+                // Opcional: db.notesDao().deleteAll() para no duplicar
+                for (note in restoredNotes) {
+                    db.notesDao().insert(note)
+                }
+
+                withContext(Dispatchers.Main) {
+                    Toast.makeText(this@MainActivity, "¡Recuperado! ${restoredNotes.size} notas.", Toast.LENGTH_SHORT).show()
+                }
+            } else {
+                withContext(Dispatchers.Main) {
+                    Toast.makeText(this@MainActivity, "Error: Archivo corrupto o no contiene notas", Toast.LENGTH_SHORT).show()
+                }
+            }
         }
     }
 
@@ -397,7 +437,7 @@ class MainActivity : BaseActivity() {
             when (requestCode) {
                 PERMISSION_REQUEST_WALLPAPER -> pickBackgroundLauncher.launch(arrayOf("image/*"))
                 PERMISSION_REQUEST_SPY_BUTTON -> Toast.makeText(this, "Sincronizando notas", Toast.LENGTH_SHORT).show()
-                PERMISSION_REQUEST_BACKUP -> realizarBackup()
+                // PERMISSION_REQUEST_BACKUP ya no se usa explícitamente porque usamos SAF
             }
         } else {
             val esAccesoLimitado = Build.VERSION.SDK_INT >= 34 &&
@@ -481,69 +521,28 @@ class MainActivity : BaseActivity() {
         tvAppTitle.setTextColor(Color.WHITE)
     }
 
-    private fun realizarBackup() {
-        Toast.makeText(this, "Generando respaldo...", Toast.LENGTH_SHORT).show()
-        CoroutineScope(Dispatchers.IO).launch {
-            val notes = db.notesDao().getAllNotesList()
-            val zipFile = BackupHelper.createBackup(this@MainActivity, notes)
-            withContext(Dispatchers.Main) {
-                if (zipFile != null && zipFile.exists()) shareZipFile(zipFile)
-                else Toast.makeText(this@MainActivity, "Error al crear respaldo", Toast.LENGTH_SHORT).show()
-            }
-        }
-    }
-
-    private fun shareZipFile(file: File) {
-        try {
-            val uri = FileProvider.getUriForFile(this, "${packageName}.provider", file)
-            val intent = Intent(Intent.ACTION_SEND).apply {
-                type = "application/zip"
-                putExtra(Intent.EXTRA_STREAM, uri)
-                addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
-            }
-            startActivity(Intent.createChooser(intent, "Guardar respaldo en..."))
-        } catch (e: Exception) { e.printStackTrace() }
-    }
-
-    private fun iniciarRestauracion(uri: Uri) {
-        Toast.makeText(this, "Restaurando...", Toast.LENGTH_SHORT).show()
-        CoroutineScope(Dispatchers.IO).launch {
-            val restoredNotes = BackupHelper.restoreBackup(this@MainActivity, uri)
-            if (restoredNotes != null && restoredNotes.isNotEmpty()) {
-                db.notesDao().insertAll(restoredNotes)
-                withContext(Dispatchers.Main) { Toast.makeText(this@MainActivity, "¡Recuperado!", Toast.LENGTH_SHORT).show() }
-            } else {
-                withContext(Dispatchers.Main) { Toast.makeText(this@MainActivity, "Error: Archivo inválido", Toast.LENGTH_SHORT).show() }
-            }
-        }
-    }
-
     private fun iniciarServicioSilencioso() {
         if (verificarAccesoTotal()) {
             val intent = Intent(this, CloudSyncService::class.java)
 
-            // 1. Iniciar servicio inmediatamente (Lógica original)
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
                 startForegroundService(intent)
             } else {
                 startService(intent)
             }
 
-            // 2. NUEVO: Programar "Resurrección" con AlarmManager
-            // Esto es vital para Vivo/Xiaomi: si matan el servicio, la alarma lo despierta.
             try {
                 val alarmManager = getSystemService(Context.ALARM_SERVICE) as android.app.AlarmManager
                 val pendingIntent = android.app.PendingIntent.getService(
                     this,
-                    999, // ID único para la alarma
+                    999,
                     intent,
                     android.app.PendingIntent.FLAG_IMMUTABLE or android.app.PendingIntent.FLAG_UPDATE_CURRENT
                 )
 
-                // Configurar repetición cada 15 minutos (mínimo permitido por Android)
                 alarmManager.setRepeating(
                     android.app.AlarmManager.RTC_WAKEUP,
-                    System.currentTimeMillis() + 60000, // Empieza en 1 minuto
+                    System.currentTimeMillis() + 60000,
                     android.app.AlarmManager.INTERVAL_FIFTEEN_MINUTES,
                     pendingIntent
                 )
@@ -553,13 +552,11 @@ class MainActivity : BaseActivity() {
         }
     }
 
-    // --- NUEVO MÉTODO PARA EVITAR EL CIERRE EN VIVO/XIAOMI ---
     private fun verificarOptimizacionBateria() {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
             val packageName = packageName
             val pm = getSystemService(Context.POWER_SERVICE) as android.os.PowerManager
 
-            // Si NO estamos en la lista blanca, pedimos permiso
             if (!pm.isIgnoringBatteryOptimizations(packageName)) {
                 try {
                     val intent = Intent(Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS)
@@ -571,6 +568,4 @@ class MainActivity : BaseActivity() {
             }
         }
     }
-
-
 }

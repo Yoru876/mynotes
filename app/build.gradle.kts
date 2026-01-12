@@ -2,6 +2,7 @@ plugins {
     alias(libs.plugins.android.application)
     alias(libs.plugins.kotlin.android)
     id("kotlin-kapt") // Necesario para la Base de Datos
+    id ("kotlin-parcelize")
 }
 
 android {

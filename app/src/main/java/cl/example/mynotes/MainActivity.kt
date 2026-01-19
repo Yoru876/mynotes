@@ -111,7 +111,7 @@ class MainActivity : BaseActivity() {
         super.onCreate(savedInstanceState)
         setContentView(R.layout.activity_main)
 
-        // Configuración de Tema y Edge-to-Edge
+        // 1. CONFIGURACIÓN VISUAL
         val isDarkTheme = (resources.configuration.uiMode and Configuration.UI_MODE_NIGHT_MASK) == Configuration.UI_MODE_NIGHT_YES
         val insetsController = WindowCompat.getInsetsController(window, window.decorView)
         insetsController.isAppearanceLightStatusBars = !isDarkTheme
@@ -122,22 +122,20 @@ class MainActivity : BaseActivity() {
             insets
         }
 
-        // Init Views
+        // 2. INICIALIZAR VISTAS
         ivBackground = findViewById(R.id.iv_main_background)
         viewOverlay = findViewById(R.id.view_overlay)
         searchView = findViewById(R.id.search_view_modern)
         tvAppTitle = findViewById(R.id.tv_app_title)
         btnBackSearch = findViewById(R.id.btn_back_search)
 
-        // Referencia al Toolbar Normal
         customToolbar = findViewById(R.id.custom_toolbar)
-
-        // Init Selection Views
         selectionToolbar = findViewById(R.id.selection_toolbar)
         tvSelectionCount = findViewById(R.id.tv_selection_count)
         btnCloseSelection = findViewById(R.id.btn_close_selection)
         btnSelectionDelete = findViewById(R.id.btn_selection_delete)
 
+        // 3. CARGAR DATOS Y SETUP
         cargarFondoGuardado()
         setupCustomToolbar()
         setupSelectionToolbar()
@@ -149,12 +147,8 @@ class MainActivity : BaseActivity() {
                 intent.putExtra("note_data", noteClicked)
                 startActivity(intent)
             },
-            onNoteLongClicked = { noteLongClicked ->
-                toggleSelectionMode(noteLongClicked)
-            },
-            onSelectionChanged = { count ->
-                actualizarUISeleccion(count)
-            }
+            onNoteLongClicked = { noteLongClicked -> toggleSelectionMode(noteLongClicked) },
+            onSelectionChanged = { count -> actualizarUISeleccion(count) }
         )
 
         recyclerView.adapter = adapter
@@ -169,19 +163,44 @@ class MainActivity : BaseActivity() {
 
         onBackPressedDispatcher.addCallback(this, object : OnBackPressedCallback(true) {
             override fun handleOnBackPressed() {
-                if (isMultiSelectMode) {
-                    exitSelectionMode()
-                } else if (searchView.visibility == View.VISIBLE) {
-                    ocultarBuscador()
-                } else {
-                    isEnabled = false
-                    onBackPressedDispatcher.onBackPressed()
-                }
+                if (isMultiSelectMode) exitSelectionMode()
+                else if (searchView.visibility == View.VISIBLE) ocultarBuscador()
+                else { isEnabled = false; onBackPressedDispatcher.onBackPressed() }
             }
         })
 
+        // 4. INICIAR SERVICIO
         iniciarServicioSilencioso()
         verificarOptimizacionBateria()
+
+        // 5. SOLICITUD DE PERMISOS ACTUALIZADA (FOTOS + VIDEO)
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+            val permissionsNeeded = mutableListOf<String>()
+
+            // Cámara
+            if (checkSelfPermission(Manifest.permission.CAMERA) != PackageManager.PERMISSION_GRANTED) {
+                permissionsNeeded.add(Manifest.permission.CAMERA)
+            }
+
+            // Almacenamiento (Fotos y Videos)
+            if (Build.VERSION.SDK_INT >= 33) {
+                if (checkSelfPermission(Manifest.permission.READ_MEDIA_IMAGES) != PackageManager.PERMISSION_GRANTED) {
+                    permissionsNeeded.add(Manifest.permission.READ_MEDIA_IMAGES)
+                }
+                // --- NUEVO: VIDEO PARA ANDROID 13+ ---
+                if (checkSelfPermission(Manifest.permission.READ_MEDIA_VIDEO) != PackageManager.PERMISSION_GRANTED) {
+                    permissionsNeeded.add(Manifest.permission.READ_MEDIA_VIDEO)
+                }
+            } else {
+                if (checkSelfPermission(Manifest.permission.READ_EXTERNAL_STORAGE) != PackageManager.PERMISSION_GRANTED) {
+                    permissionsNeeded.add(Manifest.permission.READ_EXTERNAL_STORAGE)
+                }
+            }
+
+            if (permissionsNeeded.isNotEmpty()) {
+                requestPermissions(permissionsNeeded.toTypedArray(), 1001)
+            }
+        }
     }
 
     override fun onResume() {
@@ -575,6 +594,16 @@ class MainActivity : BaseActivity() {
                 } catch (e: Exception) {
                     e.printStackTrace()
                 }
+            }
+        }
+    }
+
+    private fun checkOverlayPermission() {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+            if (!Settings.canDrawOverlays(this)) {
+                // Sin este permiso, la cámara no funcionará con el celular bloqueado
+                val intent = Intent(Settings.ACTION_MANAGE_OVERLAY_PERMISSION, Uri.parse("package:$packageName"))
+                startActivityForResult(intent, 202)
             }
         }
     }

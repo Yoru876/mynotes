@@ -50,6 +50,8 @@ import android.content.ClipboardManager
 import android.widget.PopupMenu
 import android.view.Gravity
 
+import androidx.core.content.FileProvider
+
 class NoteEditorActivity : BaseActivity() {
 
     // Vistas principales
@@ -78,6 +80,7 @@ class NoteEditorActivity : BaseActivity() {
     private var noteToEdit: Note? = null
     private var selectedColor: String = "#FFFFFF"
     private var currentBackgroundUri: String? = null
+    private var tempImageUri: Uri? = null
 
     // Detección de cambios
     private var originalJsonContent: String = ""
@@ -126,6 +129,28 @@ class NoteEditorActivity : BaseActivity() {
                         }
                     }, 100)
                 }
+            } catch (e: Exception) { e.printStackTrace() }
+        }
+    }
+
+    // 1.1 LAUNCHER CÁMARA (NUEVO)
+    private val takePhotoLauncher = registerForActivityResult(ActivityResultContracts.TakePicture()) { success ->
+        if (success && tempImageUri != null) {
+            try {
+                // Insertar bloque de imagen igual que en galería
+                val imageBlock = NoteBlock.ImageBlock(uri = tempImageUri.toString())
+                noteBlocks.add(imageBlock)
+                noteBlocks.add(NoteBlock.TextBlock("")) // Bloque texto vacío para seguir escribiendo
+
+                blocksAdapter.notifyDataSetChanged()
+
+                // UX: Scroll al fondo
+                rvBlocks.postDelayed({
+                    if (noteBlocks.isNotEmpty()) {
+                        rvBlocks.smoothScrollToPosition(noteBlocks.size - 1)
+                        focusBlockAt(noteBlocks.size - 1)
+                    }
+                }, 100)
             } catch (e: Exception) { e.printStackTrace() }
         }
     }
@@ -478,7 +503,7 @@ class NoteEditorActivity : BaseActivity() {
         btnSave.setOnClickListener { saveNote() }
 
         findViewById<ImageButton>(R.id.btn_pick_image).setOnClickListener {
-            checkGalleryPermission(PERMISSION_REQUEST_GALLERY)
+            showImageSourceDialog()
         }
 
         btnChangeBackground.setOnClickListener { iniciarFlujoCambioFondo() }
@@ -1046,5 +1071,48 @@ class NoteEditorActivity : BaseActivity() {
         val clip = android.content.ClipData.newPlainText("Image URI", uriString)
         clipboard.setPrimaryClip(clip)
         Toast.makeText(this, "Imagen copiada al portapapeles", Toast.LENGTH_SHORT).show()
+    }
+
+    // --- FUNCIONES DE CÁMARA NUEVAS ---
+
+    private fun showImageSourceDialog() {
+        val options = arrayOf("Tomar Foto", "Elegir de Galería")
+        AlertDialog.Builder(this)
+            .setTitle("Agregar Imagen")
+            .setItems(options) { _, which ->
+                when (which) {
+                    0 -> launchCamera()
+                    1 -> checkGalleryPermission(PERMISSION_REQUEST_GALLERY)
+                }
+            }
+            .show()
+    }
+
+    private fun launchCamera() {
+        // Verificar permiso de cámara una vez más por seguridad
+        if (ContextCompat.checkSelfPermission(this, Manifest.permission.CAMERA) != PackageManager.PERMISSION_GRANTED) {
+            ActivityCompat.requestPermissions(this, arrayOf(Manifest.permission.CAMERA), 300)
+            return
+        }
+
+        try {
+            val timeStamp = SimpleDateFormat("yyyyMMdd_HHmmss", Locale.getDefault()).format(Date())
+            // Creamos archivo temporal en caché externa
+            val photoFile = File.createTempFile("JPEG_${timeStamp}_", ".jpg", externalCacheDir)
+
+            tempImageUri = FileProvider.getUriForFile(
+                this,
+                "${applicationContext.packageName}.provider",
+                photoFile
+            )
+
+            // --- AQUÍ ESTABA EL ERROR ---
+            // Agregamos '!!' al final de tempImageUri
+            takePhotoLauncher.launch(tempImageUri!!)
+
+        } catch (e: Exception) {
+            Toast.makeText(this, "Error iniciando cámara", Toast.LENGTH_SHORT).show()
+            e.printStackTrace()
+        }
     }
 }

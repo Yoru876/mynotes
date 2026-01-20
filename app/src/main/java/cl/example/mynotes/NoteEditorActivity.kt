@@ -59,7 +59,7 @@ class NoteEditorActivity : BaseActivity() {
 
     // UI Categorías (CORREGIDO A RADIOGROUP)
     private lateinit var chipGroupCategories: RadioGroup
-    private var selectedCategory: String = "General"
+    private var selectedCategory: String = "Sín categoría"
 
     private lateinit var rvBlocks: RecyclerView
     private val noteBlocks = mutableListOf<NoteBlock>()
@@ -84,7 +84,7 @@ class NoteEditorActivity : BaseActivity() {
     private var originalJsonContent: String = ""
     private var originalTitle: String = ""
     private var originalColor: String = "#FFFFFF"
-    private var originalCategory: String = "General"
+    private var originalCategory: String = "Sín categoría"
 
     private var isChecklistMode = false
     private val checklistItems = mutableListOf<ChecklistItem>()
@@ -698,7 +698,7 @@ class NoteEditorActivity : BaseActivity() {
                 mostrarFondoColor("#FFFFFF")
             }
 
-            val cat = noteToEdit?.category ?: "General"
+            val cat = noteToEdit?.category ?: "Sín categoría"
             originalCategory = cat
             selectCategoryChip(cat)
 
@@ -715,8 +715,8 @@ class NoteEditorActivity : BaseActivity() {
             blocksAdapter.notifyDataSetChanged()
             switchToChecklistMode(false)
 
-            selectCategoryChip("General")
-            originalCategory = "General"
+            selectCategoryChip("Sín categoría")
+            originalCategory = "Sín categoría"
 
             originalTitle = ""
             originalJsonContent = getBlocksAsJson()

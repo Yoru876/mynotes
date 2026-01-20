@@ -223,7 +223,7 @@ class MainActivity : BaseActivity() {
                 }
             }
 
-            if (category != "Todas" && category != "General") {
+            if (category != "Todas" && category != "Sín categoría") {
                 radioButton.setOnLongClickListener {
                     mostrarOpcionesCategoria(category)
                     true
@@ -298,7 +298,7 @@ class MainActivity : BaseActivity() {
     private fun confirmarEliminarCategoria(categoryName: String) {
         AlertDialog.Builder(this)
             .setTitle("¿Eliminar $categoryName?")
-            .setMessage("Las notas de esta categoría se moverán a 'General'.")
+            .setMessage("Las notas de esta categoría se moverán a 'Sín categoría'.")
             .setPositiveButton("Eliminar") { _, _ ->
                 CategoryManager.deleteCategory(this, categoryName)
                 CoroutineScope(Dispatchers.IO).launch {

@@ -35,4 +35,26 @@
         <item name="android:windowDrawsSystemBarBackgrounds">true</item>
         <item name="android:windowLightStatusBar">false</item>
     </style>
+
+    <style name="PixelChipStyle" parent="Widget.MaterialComponents.Chip.Choice">
+        <item name="android:background">@drawable/selector_chip_pixel</item>
+
+        <item name="chipBackgroundColor">@android:color/transparent</item>
+
+        <item name="android:textColor">@color/selector_chip_text_color</item>
+
+        <item name="android:textSize">16sp</item>
+
+        <item name="checkedIconVisible">false</item>
+        <item name="chipIconVisible">false</item>
+
+        <item name="chipStartPadding">12dp</item>
+        <item name="chipEndPadding">12dp</item>
+
+        <item name="android:minHeight">48dp</item>
+
+        <item name="chipCornerRadius">0dp</item>
+        <item name="chipStrokeWidth">0dp</item>
+        <item name="rippleColor">@android:color/transparent</item>
+    </style>
 </resources>

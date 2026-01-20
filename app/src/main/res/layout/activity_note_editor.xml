@@ -108,10 +108,26 @@
             android:layout_width="wrap_content"
             android:layout_height="wrap_content"
             android:layout_marginTop="8dp"
-            android:layout_marginBottom="12dp"
+            android:layout_marginBottom="8dp"
             android:textColor="#9E9E9E"
             android:textSize="13sp"
             tools:text="24 May 21:00" />
+
+        <HorizontalScrollView
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:scrollbars="none"
+            android:clipToPadding="false"
+            android:layout_marginBottom="8dp">
+
+            <RadioGroup
+                android:id="@+id/chip_group_editor"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:orientation="horizontal">
+            </RadioGroup>
+
+        </HorizontalScrollView>
     </LinearLayout>
 
     <androidx.recyclerview.widget.RecyclerView

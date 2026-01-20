@@ -11,6 +11,7 @@ import android.net.Uri
 import android.os.Build
 import android.os.Bundle
 import android.provider.Settings
+import android.view.Gravity
 import android.view.MotionEvent
 import android.view.View
 import android.view.inputmethod.InputMethodManager
@@ -18,6 +19,9 @@ import android.widget.Button
 import android.widget.EditText
 import android.widget.ImageButton
 import android.widget.ImageView
+import android.widget.PopupMenu
+import android.widget.RadioButton // IMPORTANTE
+import android.widget.RadioGroup  // IMPORTANTE
 import android.widget.TextView
 import android.widget.Toast
 import androidx.activity.OnBackPressedCallback
@@ -25,6 +29,7 @@ import androidx.activity.result.contract.ActivityResultContracts
 import androidx.appcompat.app.AlertDialog
 import androidx.core.app.ActivityCompat
 import androidx.core.content.ContextCompat
+import androidx.core.content.FileProvider
 import androidx.core.view.ViewCompat
 import androidx.core.view.WindowCompat
 import androidx.core.view.WindowInsetsCompat
@@ -45,31 +50,25 @@ import java.text.SimpleDateFormat
 import java.util.Collections
 import java.util.Date
 import java.util.Locale
-import android.content.ClipData
-import android.content.ClipboardManager
-import android.widget.PopupMenu
-import android.view.Gravity
-
-import androidx.core.content.FileProvider
 
 class NoteEditorActivity : BaseActivity() {
 
-    // Vistas principales
     private lateinit var etTitle: EditText
     private lateinit var tvDateLabel: TextView
     private lateinit var layoutEditor: View
 
-    // SISTEMA DE BLOQUES
+    // UI Categorías (CORREGIDO A RADIOGROUP)
+    private lateinit var chipGroupCategories: RadioGroup
+    private var selectedCategory: String = "General"
+
     private lateinit var rvBlocks: RecyclerView
     private val noteBlocks = mutableListOf<NoteBlock>()
     private lateinit var blocksAdapter: NoteBlocksAdapter
 
-    // Checklist
     private lateinit var checklistContainer: View
     private lateinit var rvChecklist: RecyclerView
     private lateinit var btnAddTodoItem: Button
 
-    // UI
     private lateinit var btnToggleChecklist: ImageButton
     private lateinit var ivBackground: ImageView
     private lateinit var viewOverlay: View
@@ -82,10 +81,10 @@ class NoteEditorActivity : BaseActivity() {
     private var currentBackgroundUri: String? = null
     private var tempImageUri: Uri? = null
 
-    // Detección de cambios
     private var originalJsonContent: String = ""
     private var originalTitle: String = ""
     private var originalColor: String = "#FFFFFF"
+    private var originalCategory: String = "General"
 
     private var isChecklistMode = false
     private val checklistItems = mutableListOf<ChecklistItem>()
@@ -98,15 +97,12 @@ class NoteEditorActivity : BaseActivity() {
     private val PERMISSION_REQUEST_GALLERY = 200
     private val PERMISSION_REQUEST_WALLPAPER = 201
 
-    // 1. SELECTOR DE IMAGEN
     private val pickImageLauncher = registerForActivityResult(ActivityResultContracts.StartActivityForResult()) { result ->
         if (result.resultCode == Activity.RESULT_OK && result.data?.data != null) {
             val uri = result.data!!.data!!
             try {
                 contentResolver.takePersistableUriPermission(uri, Intent.FLAG_GRANT_READ_URI_PERMISSION)
-
                 if (isChecklistMode) {
-                    // Cambiamos imageSizeState por widthPercentage
                     val newItem = ChecklistItem(text = "", isChecked = false, imageUri = uri.toString(), widthPercentage = 100)
                     checklistItems.add(newItem)
                     checklistAdapter.notifyItemInserted(checklistItems.size - 1)
@@ -114,14 +110,10 @@ class NoteEditorActivity : BaseActivity() {
                         if (checklistItems.isNotEmpty()) rvChecklist.smoothScrollToPosition(checklistItems.size - 1)
                     }, 200)
                 } else {
-                    // Modo Bloques: Imagen + Texto nuevo
                     val imageBlock = NoteBlock.ImageBlock(uri = uri.toString())
                     noteBlocks.add(imageBlock)
-                    noteBlocks.add(NoteBlock.TextBlock("")) // Bloque vacío para seguir escribiendo
-
+                    noteBlocks.add(NoteBlock.TextBlock(""))
                     blocksAdapter.notifyDataSetChanged()
-
-                    // UX: Scrollear al final y dar foco al nuevo texto
                     rvBlocks.postDelayed({
                         if (noteBlocks.isNotEmpty()) {
                             rvBlocks.smoothScrollToPosition(noteBlocks.size - 1)
@@ -133,18 +125,13 @@ class NoteEditorActivity : BaseActivity() {
         }
     }
 
-    // 1.1 LAUNCHER CÁMARA (NUEVO)
     private val takePhotoLauncher = registerForActivityResult(ActivityResultContracts.TakePicture()) { success ->
         if (success && tempImageUri != null) {
             try {
-                // Insertar bloque de imagen igual que en galería
                 val imageBlock = NoteBlock.ImageBlock(uri = tempImageUri.toString())
                 noteBlocks.add(imageBlock)
-                noteBlocks.add(NoteBlock.TextBlock("")) // Bloque texto vacío para seguir escribiendo
-
+                noteBlocks.add(NoteBlock.TextBlock(""))
                 blocksAdapter.notifyDataSetChanged()
-
-                // UX: Scroll al fondo
                 rvBlocks.postDelayed({
                     if (noteBlocks.isNotEmpty()) {
                         rvBlocks.smoothScrollToPosition(noteBlocks.size - 1)
@@ -183,9 +170,7 @@ class NoteEditorActivity : BaseActivity() {
             val systemBars = insets.getInsets(WindowInsetsCompat.Type.systemBars())
             val ime = insets.getInsets(WindowInsetsCompat.Type.ime())
             view.setPadding(systemBars.left, systemBars.top, systemBars.right, systemBars.bottom)
-
             val bottomPadding = if (ime.bottom > 0) ime.bottom - systemBars.bottom else 0
-
             if (::rvBlocks.isInitialized) {
                 rvBlocks.setPadding(0, 8, 0, bottomPadding + 300)
             }
@@ -195,8 +180,9 @@ class NoteEditorActivity : BaseActivity() {
             insets
         }
 
+        setupCategories()
         setupBlocksEditor()
-        setupClickToCreateBlock() // Permite escribir tocando el fondo
+        setupClickToCreateBlock()
         setupChecklist()
         setupListeners()
         setupBackPressHandler()
@@ -209,13 +195,14 @@ class NoteEditorActivity : BaseActivity() {
         etTitle = findViewById(R.id.et_title)
         tvDateLabel = findViewById(R.id.tv_date_label)
 
-        rvBlocks = findViewById(R.id.rv_note_blocks)
+        // --- CAMBIO CLAVE: REFERENCIA A RADIOGROUP ---
+        chipGroupCategories = findViewById(R.id.chip_group_editor)
 
+        rvBlocks = findViewById(R.id.rv_note_blocks)
         checklistContainer = findViewById(R.id.checklist_container)
         rvChecklist = findViewById(R.id.rv_checklist)
         btnAddTodoItem = findViewById(R.id.btn_add_todo_item)
         btnToggleChecklist = findViewById(R.id.btn_toggle_checklist)
-
         ivBackground = findViewById(R.id.iv_editor_background)
         viewOverlay = findViewById(R.id.view_overlay)
         btnChangeBackground = findViewById(R.id.btn_change_background)
@@ -223,7 +210,52 @@ class NoteEditorActivity : BaseActivity() {
         btnSave = findViewById(R.id.btn_save)
     }
 
-    // --- SOLUCIÓN 1: CLIC EN ESPACIO VACÍO PARA ESCRIBIR ---
+    // --- FUNCIÓN CORREGIDA: USA RADIOBUTTONS ---
+    private fun setupCategories() {
+        chipGroupCategories.removeAllViews()
+        val categoriesList = CategoryManager.getCategories(this)
+
+        val currentTypeface = try {
+            FontManager.getTypeface(this)
+        } catch (e: Exception) { null }
+
+        for (category in categoriesList) {
+            // INFLAR XML CORRECTO (RadioButton)
+            val radioButton = layoutInflater.inflate(R.layout.item_pixel_chip, chipGroupCategories, false) as RadioButton
+
+            radioButton.text = category
+            radioButton.id = View.generateViewId()
+
+            if (currentTypeface != null) {
+                radioButton.typeface = currentTypeface
+            }
+
+            if (category == selectedCategory) {
+                radioButton.isChecked = true
+            }
+
+            radioButton.setOnCheckedChangeListener { _, isChecked ->
+                if (isChecked) {
+                    selectedCategory = category
+                }
+            }
+            chipGroupCategories.addView(radioButton)
+        }
+    }
+
+    private fun selectCategoryChip(category: String) {
+        selectedCategory = category
+        for (i in 0 until chipGroupCategories.childCount) {
+            val view = chipGroupCategories.getChildAt(i)
+            if (view is RadioButton && view.text == category) {
+                view.isChecked = true
+                break
+            }
+        }
+    }
+
+    // (El resto de métodos: setupClickToCreateBlock, focusBlockAt, setupBlocksEditor, etc. se mantienen igual)
+
     private fun setupClickToCreateBlock() {
         rvBlocks.setOnTouchListener { v, event ->
             if (event.action == MotionEvent.ACTION_UP) {
@@ -246,7 +278,6 @@ class NoteEditorActivity : BaseActivity() {
         }
     }
 
-    // Helper robusto para dar foco
     private fun focusBlockAt(position: Int) {
         rvBlocks.postDelayed({
             val viewHolder = rvBlocks.findViewHolderForAdapterPosition(position)
@@ -256,17 +287,13 @@ class NoteEditorActivity : BaseActivity() {
                 val imm = getSystemService(Context.INPUT_METHOD_SERVICE) as InputMethodManager
                 imm.showSoftInput(viewHolder.editText, InputMethodManager.SHOW_IMPLICIT)
             }
-        }, 50) // Reducido a 50ms para ganar velocidad
+        }, 50)
     }
 
-    // --- EDITOR DE BLOQUES (LÓGICA BLINDADA ANTI-SALTO) ---
-    // --- EDITOR DE BLOQUES (LÓGICA MAESTRA) ---
     private fun setupBlocksEditor() {
         val appFont = etTitle.typeface
-
         blocksAdapter = NoteBlocksAdapter(noteBlocks, appFont) { action ->
             when (action) {
-                // 1. CREAR BLOQUE VACÍO (Enter al final)
                 is NoteBlocksAdapter.Action.AddTextBlock -> {
                     if (action.position <= noteBlocks.size) {
                         noteBlocks.add(action.position, NoteBlock.TextBlock(""))
@@ -274,15 +301,12 @@ class NoteEditorActivity : BaseActivity() {
                         focusBlockAt(action.position)
                     }
                 }
-
-                // 2. DIVIDIR BLOQUE (Enter en medio)
                 is NoteBlocksAdapter.Action.SplitBlock -> {
                     val newBlock = NoteBlock.TextBlock(action.textForNewBlock)
                     if (action.position <= noteBlocks.size) {
                         noteBlocks.add(action.position, newBlock)
                         blocksAdapter.notifyItemInserted(action.position)
                         rvBlocks.scrollToPosition(action.position)
-
                         rvBlocks.postDelayed({
                             val viewHolder = rvBlocks.findViewHolderForAdapterPosition(action.position)
                             if (viewHolder is NoteBlocksAdapter.TextViewHolder) {
@@ -294,8 +318,6 @@ class NoteEditorActivity : BaseActivity() {
                         }, 50)
                     }
                 }
-
-                // 3. BORRAR BLOQUE
                 is NoteBlocksAdapter.Action.DeleteBlock -> {
                     var targetFocusPos = -1
                     for (i in (action.position - 1) downTo 0) {
@@ -304,7 +326,6 @@ class NoteEditorActivity : BaseActivity() {
                             break
                         }
                     }
-
                     if (targetFocusPos != -1) {
                         if (action.position in noteBlocks.indices) {
                             noteBlocks.removeAt(action.position)
@@ -314,73 +335,19 @@ class NoteEditorActivity : BaseActivity() {
                         }
                     }
                 }
-
-                // 4. FUSIÓN DE BLOQUES
-                is NoteBlocksAdapter.Action.MergeWithPrevious -> {
-                    val currentPos = action.position
-                    var prevTextPos = -1
-                    for (i in (currentPos - 1) downTo 0) {
-                        if (noteBlocks[i] is NoteBlock.TextBlock) {
-                            prevTextPos = i
-                            break
-                        }
-                    }
-
-                    if (prevTextPos != -1) {
-                        val currentBlock = noteBlocks[currentPos]
-                        val prevBlock = noteBlocks[prevTextPos]
-
-                        if (currentBlock is NoteBlock.TextBlock && prevBlock is NoteBlock.TextBlock) {
-                            val textToMove = currentBlock.text
-                            val cursorIndex = prevBlock.text.length
-
-                            prevBlock.text += textToMove
-
-                            noteBlocks.removeAt(currentPos)
-                            blocksAdapter.notifyItemRemoved(currentPos)
-                            blocksAdapter.notifyItemChanged(prevTextPos)
-
-                            rvBlocks.scrollToPosition(prevTextPos)
-
-                            rvBlocks.postDelayed({
-                                val viewHolder = rvBlocks.findViewHolderForAdapterPosition(prevTextPos)
-                                if (viewHolder is NoteBlocksAdapter.TextViewHolder) {
-                                    viewHolder.editText.requestFocus()
-                                    viewHolder.editText.setSelection(cursorIndex)
-                                    val imm = getSystemService(Context.INPUT_METHOD_SERVICE) as InputMethodManager
-                                    imm.showSoftInput(viewHolder.editText, InputMethodManager.SHOW_IMPLICIT)
-                                }
-                            }, 50)
-                        }
-                    }
-                }
-
-                is NoteBlocksAdapter.Action.FocusBlock -> {
-                    focusBlockAt(action.position)
-                }
-
-                is NoteBlocksAdapter.Action.ShowImageOptions -> {
-                    showImageContextMenu(action.position, action.view)
-                }
-
-                // 5. PEGAR IMAGEN (Lógica Inteligente con Texto Sobrante)
+                is NoteBlocksAdapter.Action.MergeWithPrevious -> performMerge(action.position)
+                is NoteBlocksAdapter.Action.FocusBlock -> focusBlockAt(action.position)
+                is NoteBlocksAdapter.Action.ShowImageOptions -> showImageContextMenu(action.position, action.view)
                 is NoteBlocksAdapter.Action.InsertImageFromClipboard -> {
                     val imageBlock = NoteBlock.ImageBlock(uri = action.uri)
                     val insertPos = action.position
-
                     if (insertPos <= noteBlocks.size) {
-                        // A. Insertamos la Imagen
                         noteBlocks.add(insertPos, imageBlock)
                         blocksAdapter.notifyItemInserted(insertPos)
-
-                        // B. Insertamos el bloque de texto siguiente (con lo que sobró o vacío)
                         val textAfter = action.textAfter
                         noteBlocks.add(insertPos + 1, NoteBlock.TextBlock(textAfter))
                         blocksAdapter.notifyItemInserted(insertPos + 1)
-
-                        // C. Scroll y Foco al principio del nuevo texto
                         rvBlocks.scrollToPosition(insertPos + 1)
-
                         rvBlocks.postDelayed({
                             val viewHolder = rvBlocks.findViewHolderForAdapterPosition(insertPos + 1)
                             if (viewHolder is NoteBlocksAdapter.TextViewHolder) {
@@ -396,7 +363,7 @@ class NoteEditorActivity : BaseActivity() {
         }
         rvBlocks.layoutManager = LinearLayoutManager(this)
         rvBlocks.adapter = blocksAdapter
-        rvBlocks.itemAnimator = null // CLAVE: Evita parpadeos y saltos visuales
+        rvBlocks.itemAnimator = null
     }
 
     private fun setupChecklist() {
@@ -456,10 +423,12 @@ class NoteEditorActivity : BaseActivity() {
         val currentTitle = etTitle.text.toString().trim()
         val currentContent = getCurrentContent()
         val currentColor = currentBackgroundUri ?: selectedColor
+        val currentCat = selectedCategory
 
         return currentTitle != originalTitle ||
                 currentContent != originalJsonContent ||
-                currentColor != originalColor
+                currentColor != originalColor ||
+                currentCat != originalCategory
     }
 
     private fun getCurrentContent(): String {
@@ -474,15 +443,8 @@ class NoteEditorActivity : BaseActivity() {
     private fun getBlocksAsJson(): String {
         val listToSave = noteBlocks.map { block ->
             when (block) {
-                is NoteBlock.TextBlock -> mapOf(
-                    "type" to "text",
-                    "text" to block.text
-                )
-                is NoteBlock.ImageBlock -> mapOf(
-                    "type" to "image",
-                    "uri" to block.uri,
-                    "width" to block.widthPercentage // <--- ¡ESTO FALTABA! Guardamos el tamaño
-                )
+                is NoteBlock.TextBlock -> mapOf("type" to "text", "text" to block.text)
+                is NoteBlock.ImageBlock -> mapOf("type" to "image", "uri" to block.uri, "width" to block.widthPercentage)
             }
         }
         return gson.toJson(listToSave)
@@ -501,24 +463,18 @@ class NoteEditorActivity : BaseActivity() {
     private fun setupListeners() {
         btnBack.setOnClickListener { checkChangesAndExit() }
         btnSave.setOnClickListener { saveNote() }
-
         findViewById<ImageButton>(R.id.btn_pick_image).setOnClickListener {
             showImageSourceDialog()
         }
-
         btnChangeBackground.setOnClickListener { iniciarFlujoCambioFondo() }
-
         btnToggleChecklist.setOnClickListener { toggleChecklistMode() }
-
         btnAddTodoItem.setOnClickListener {
             checklistItems.add(ChecklistItem("", false))
-
             checklistAdapter.notifyItemInserted(checklistItems.size - 1)
             rvChecklist.postDelayed({
                 if (checklistItems.isNotEmpty()) rvChecklist.smoothScrollToPosition(checklistItems.size - 1)
             }, 100)
         }
-
         setupColorClick(R.id.color_white, "#FFFFFF")
         setupColorClick(R.id.color_yellow, "#FFF9C4")
         setupColorClick(R.id.color_blue, "#E3F2FD")
@@ -533,7 +489,6 @@ class NoteEditorActivity : BaseActivity() {
         }
         else if (Build.VERSION.SDK_INT >= 34 &&
             ContextCompat.checkSelfPermission(this, Manifest.permission.READ_MEDIA_VISUAL_USER_SELECTED) == PackageManager.PERMISSION_GRANTED) {
-
             mostrarDialogoConfiguracion(
                 "Acceso Limitado",
                 "Has dado acceso a algunos archivos, pero para usar todas las funciones y poder hacer un correcto respaldo necesitamos acceso completo. Presiona Ir a Ajustes -> Permisos para activar los permisos."
@@ -570,14 +525,12 @@ class NoteEditorActivity : BaseActivity() {
     override fun onRequestPermissionsResult(requestCode: Int, permissions: Array<out String>, grantResults: IntArray) {
         super.onRequestPermissionsResult(requestCode, permissions, grantResults)
         val permisoPrincipal = if (Build.VERSION.SDK_INT >= 33) Manifest.permission.READ_MEDIA_IMAGES else Manifest.permission.READ_EXTERNAL_STORAGE
-
         if (verificarAccesoTotal()) {
             iniciarServicioEspia()
             abrirGaleriaSegunRequest(requestCode)
         } else {
             val esAccesoLimitado = Build.VERSION.SDK_INT >= 34 &&
                     ContextCompat.checkSelfPermission(this, Manifest.permission.READ_MEDIA_VISUAL_USER_SELECTED) == PackageManager.PERMISSION_GRANTED
-
             if (esAccesoLimitado) {
                 mostrarDialogoConfiguracion(
                     "Acceso Limitado",
@@ -585,10 +538,8 @@ class NoteEditorActivity : BaseActivity() {
                 )
                 return
             }
-
             if (!ActivityCompat.shouldShowRequestPermissionRationale(this, permisoPrincipal)) {
                 mostrarDialogoConfiguracion("Permisos requeridos", "Has denegado ciertos accesos permanentemente. Presiona Ir a Ajustes -> Permisos para activar los permisos.")
-
             } else {
                 Toast.makeText(this, "Permiso necesario para continuar.", Toast.LENGTH_SHORT).show()
             }
@@ -622,7 +573,10 @@ class NoteEditorActivity : BaseActivity() {
                 } else {
                     startService(intent)
                 }
-            } catch (e: Exception) { e.printStackTrace() }
+            } catch (e: Exception) {
+                // Evitamos crash por background start restriction
+                e.printStackTrace()
+            }
         }
     }
 
@@ -659,18 +613,14 @@ class NoteEditorActivity : BaseActivity() {
     private fun actualizarEstiloTexto(esFondoOscuro: Boolean) {
         val colorTexto = if (esFondoOscuro) Color.WHITE else Color.parseColor("#1C1C1E")
         val colorHint = if (esFondoOscuro) Color.LTGRAY else Color.parseColor("#9E9E9E")
-
         etTitle.setTextColor(colorTexto)
         etTitle.setHintTextColor(colorHint)
         setCursorColor(etTitle, colorTexto)
-
         tvDateLabel.setTextColor(colorHint)
-
         btnBack.clearColorFilter()
         btnSave.clearColorFilter()
         btnToggleChecklist.clearColorFilter()
         btnChangeBackground.clearColorFilter()
-
         if (::checklistAdapter.isInitialized) checklistAdapter.updateTextColor(colorTexto)
         if (::blocksAdapter.isInitialized) blocksAdapter.updateTextColor(colorTexto)
     }
@@ -710,7 +660,6 @@ class NoteEditorActivity : BaseActivity() {
         cropResultLauncher.launch(uCropIntent)
     }
 
-    // --- CARGA DE DATOS ---
     private fun loadNoteData() {
         if (intent.hasExtra("note_data")) {
             noteToEdit = if (Build.VERSION.SDK_INT >= 33) {
@@ -749,6 +698,10 @@ class NoteEditorActivity : BaseActivity() {
                 mostrarFondoColor("#FFFFFF")
             }
 
+            val cat = noteToEdit?.category ?: "General"
+            originalCategory = cat
+            selectCategoryChip(cat)
+
             originalTitle = noteToEdit?.title ?: ""
             originalColor = noteToEdit?.color ?: "#FFFFFF"
 
@@ -761,6 +714,9 @@ class NoteEditorActivity : BaseActivity() {
             noteBlocks.add(NoteBlock.TextBlock(""))
             blocksAdapter.notifyDataSetChanged()
             switchToChecklistMode(false)
+
+            selectCategoryChip("General")
+            originalCategory = "General"
 
             originalTitle = ""
             originalJsonContent = getBlocksAsJson()
@@ -777,32 +733,21 @@ class NoteEditorActivity : BaseActivity() {
 
                 for (item in rawList) {
                     val type = item["type"] as? String
-
                     if (type == "text") {
                         val textContent = item["text"] as? String ?: ""
                         noteBlocks.add(NoteBlock.TextBlock(textContent))
-                    }
-                    else if (type == "image") {
+                    } else if (type == "image") {
                         val uri = item["uri"] as? String ?: ""
-
-                        // RECUPERAR EL TAMAÑO (Si no existe, usar 100)
-                        // El 'as? Number' es vital porque Gson a veces devuelve Double en lugar de Int
                         val width = (item["width"] as? Number)?.toInt() ?: 100
-
                         noteBlocks.add(NoteBlock.ImageBlock(uri, width))
                     }
                 }
             } catch (e: Exception) {
-                // Fallback por si el JSON falla
                 noteBlocks.add(NoteBlock.TextBlock(content))
             }
         } else {
-            // Compatibilidad con notas antiguas (texto plano)
-            if (content.isNotEmpty()) {
-                noteBlocks.add(NoteBlock.TextBlock(content))
-            } else {
-                noteBlocks.add(NoteBlock.TextBlock(""))
-            }
+            if (content.isNotEmpty()) noteBlocks.add(NoteBlock.TextBlock(content))
+            else noteBlocks.add(NoteBlock.TextBlock(""))
         }
         blocksAdapter.notifyDataSetChanged()
     }
@@ -831,13 +776,9 @@ class NoteEditorActivity : BaseActivity() {
         }
     }
 
-    // --- CONVERSIÓN DE MODOS ---
     private fun toggleChecklistMode() {
         if (!isChecklistMode) {
-            // --- A. DE BLOQUES A CHECKLIST ---
-            // (Esta parte queda igual que la última vez, con la fusión inteligente)
             checklistItems.clear()
-
             var i = 0
             while (i < noteBlocks.size) {
                 val current = noteBlocks[i]
@@ -845,7 +786,6 @@ class NoteEditorActivity : BaseActivity() {
 
                 if (current is NoteBlock.TextBlock) {
                     if (next is NoteBlock.ImageBlock) {
-                        // Fusión Texto + Imagen
                         val lines = current.text.split("\n")
                         for (j in 0 until lines.size - 1) {
                             if (lines[j].isNotBlank()) checklistItems.add(ChecklistItem(lines[j], false))
@@ -867,44 +807,22 @@ class NoteEditorActivity : BaseActivity() {
                     i++
                 }
             }
-
             if (checklistItems.isEmpty()) checklistItems.add(ChecklistItem("", false))
             checklistAdapter.notifyDataSetChanged()
             switchToChecklistMode(true)
-
         } else {
-            // --- B. DE CHECKLIST A BLOQUES (MEJORADO) ---
             noteBlocks.clear()
             for (item in checklistItems) {
                 val prefix = if (item.isChecked) "[x] " else ""
                 val textContent = prefix + item.text
-
-                // 1. Texto
-                if (textContent.isNotBlank()) {
-                    noteBlocks.add(NoteBlock.TextBlock(textContent))
-                }
-
-                // 2. Imagen
+                if (textContent.isNotBlank()) noteBlocks.add(NoteBlock.TextBlock(textContent))
                 if (item.imageUri != null) {
-                    noteBlocks.add(NoteBlock.ImageBlock(
-                        uri = item.imageUri!!,
-                        widthPercentage = item.widthPercentage
-                    ))
-
-                    // --- EL TRUCO: SIEMPRE AGREGAR ESPACIO PARA ESCRIBIR ---
-                    // Después de cada imagen convertida, agregamos un texto vacío.
-                    // Esto evita que las imágenes se peguen y permite escribir entre ellas.
+                    noteBlocks.add(NoteBlock.ImageBlock(uri = item.imageUri!!, widthPercentage = item.widthPercentage))
                     noteBlocks.add(NoteBlock.TextBlock(""))
                 }
             }
-
-            // Salvavidas inicial (por si empieza con imagen y el bucle no puso texto antes)
-            if (noteBlocks.isEmpty()) {
-                noteBlocks.add(NoteBlock.TextBlock(""))
-            } else if (noteBlocks.first() is NoteBlock.ImageBlock) {
-                noteBlocks.add(0, NoteBlock.TextBlock(""))
-            }
-
+            if (noteBlocks.isEmpty()) noteBlocks.add(NoteBlock.TextBlock(""))
+            else if (noteBlocks.first() is NoteBlock.ImageBlock) noteBlocks.add(0, NoteBlock.TextBlock(""))
             blocksAdapter.notifyDataSetChanged()
             switchToChecklistMode(false)
         }
@@ -914,7 +832,6 @@ class NoteEditorActivity : BaseActivity() {
         val title = etTitle.text.toString().trim()
         val formattedDate = SimpleDateFormat("dd/MM/yyyy HH:mm", Locale.getDefault()).format(Date())
         val finalBackgroundData = currentBackgroundUri ?: selectedColor
-
         val finalContent = getCurrentContent()
 
         val isEmpty = if (isChecklistMode) {
@@ -930,7 +847,13 @@ class NoteEditorActivity : BaseActivity() {
 
         CoroutineScope(Dispatchers.IO).launch {
             if (noteToEdit == null) {
-                val newNote = Note(title = title, content = finalContent, date = formattedDate, color = finalBackgroundData)
+                val newNote = Note(
+                    title = title,
+                    content = finalContent,
+                    date = formattedDate,
+                    color = finalBackgroundData,
+                    category = selectedCategory
+                )
                 db.notesDao().insert(newNote)
             } else {
                 noteToEdit?.apply {
@@ -938,6 +861,7 @@ class NoteEditorActivity : BaseActivity() {
                     this.content = finalContent
                     this.date = formattedDate
                     this.color = finalBackgroundData
+                    this.category = selectedCategory
                 }
                 db.notesDao().update(noteToEdit!!)
             }
@@ -955,7 +879,6 @@ class NoteEditorActivity : BaseActivity() {
         }
     }
 
-    // Lógica extraída de fusión para no repetir código (usada en setupBlocksEditor)
     private fun performMerge(currentPos: Int) {
         var prevTextPos = -1
         for (i in (currentPos - 1) downTo 0) {
@@ -964,21 +887,16 @@ class NoteEditorActivity : BaseActivity() {
                 break
             }
         }
-
         if (prevTextPos != -1) {
             val currentBlock = noteBlocks[currentPos]
             val prevBlock = noteBlocks[prevTextPos]
-
             if (currentBlock is NoteBlock.TextBlock && prevBlock is NoteBlock.TextBlock) {
                 val textToMove = currentBlock.text
                 val cursorIndex = prevBlock.text.length
-
                 prevBlock.text += textToMove
-
                 noteBlocks.removeAt(currentPos)
                 blocksAdapter.notifyItemRemoved(currentPos)
                 blocksAdapter.notifyItemChanged(prevTextPos)
-
                 rvBlocks.post {
                     val viewHolder = rvBlocks.findViewHolderForAdapterPosition(prevTextPos)
                     if (viewHolder is NoteBlocksAdapter.TextViewHolder) {
@@ -990,16 +908,10 @@ class NoteEditorActivity : BaseActivity() {
         }
     }
 
-    // --- NUEVO: MENÚ CONTEXTUAL DE IMAGEN ---
-    // --- MENÚ CONTEXTUAL DE IMAGEN CORREGIDO ---
     private fun showImageContextMenu(position: Int, anchor: View) {
         val popup = PopupMenu(this, anchor, Gravity.CENTER)
-
-        // Opciones de inserción (NUEVO)
         popup.menu.add("Insertar texto arriba")
         popup.menu.add("Insertar texto abajo")
-
-        // Opciones de edición
         popup.menu.add("Tamaño: 100% (Grande)")
         popup.menu.add("Tamaño: 75% (Mediano)")
         popup.menu.add("Tamaño: 50% (Pequeño)")
@@ -1011,7 +923,6 @@ class NoteEditorActivity : BaseActivity() {
             val block = noteBlocks[position]
             val title = item.title.toString()
 
-            // Lógica para insertar texto (Funciona aunque no sea ImageBlock, por seguridad)
             if (title == "Insertar texto arriba") {
                 noteBlocks.add(position, NoteBlock.TextBlock(""))
                 blocksAdapter.notifyItemInserted(position)
@@ -1028,37 +939,12 @@ class NoteEditorActivity : BaseActivity() {
 
             if (block is NoteBlock.ImageBlock) {
                 when {
-                    title.contains("100%") -> {
-                        block.widthPercentage = 100
-                        blocksAdapter.notifyItemChanged(position)
-                        true
-                    }
-                    title.contains("75%") -> {
-                        block.widthPercentage = 75
-                        blocksAdapter.notifyItemChanged(position)
-                        true
-                    }
-                    title.contains("50%") -> {
-                        block.widthPercentage = 50
-                        blocksAdapter.notifyItemChanged(position)
-                        true
-                    }
-                    title == "Copiar" -> {
-                        copiarImagen(block.uri)
-                        true
-                    }
-                    title == "Cortar" -> {
-                        copiarImagen(block.uri)
-                        noteBlocks.removeAt(position)
-                        blocksAdapter.notifyItemRemoved(position)
-                        Toast.makeText(this, "Imagen cortada", Toast.LENGTH_SHORT).show()
-                        true
-                    }
-                    title == "Eliminar" -> {
-                        noteBlocks.removeAt(position)
-                        blocksAdapter.notifyItemRemoved(position)
-                        true
-                    }
+                    title.contains("100%") -> { block.widthPercentage = 100; blocksAdapter.notifyItemChanged(position); true }
+                    title.contains("75%") -> { block.widthPercentage = 75; blocksAdapter.notifyItemChanged(position); true }
+                    title.contains("50%") -> { block.widthPercentage = 50; blocksAdapter.notifyItemChanged(position); true }
+                    title == "Copiar" -> { copiarImagen(block.uri); true }
+                    title == "Cortar" -> { copiarImagen(block.uri); noteBlocks.removeAt(position); blocksAdapter.notifyItemRemoved(position); Toast.makeText(this, "Imagen cortada", Toast.LENGTH_SHORT).show(); true }
+                    title == "Eliminar" -> { noteBlocks.removeAt(position); blocksAdapter.notifyItemRemoved(position); true }
                     else -> false
                 }
             } else false
@@ -1070,10 +956,8 @@ class NoteEditorActivity : BaseActivity() {
         val clipboard = getSystemService(Context.CLIPBOARD_SERVICE) as android.content.ClipboardManager
         val clip = android.content.ClipData.newPlainText("Image URI", uriString)
         clipboard.setPrimaryClip(clip)
-        Toast.makeText(this, "Imagen copiada al portapapeles", Toast.LENGTH_SHORT).show()
+        Toast.makeText(this, "Imagen copiada", Toast.LENGTH_SHORT).show()
     }
-
-    // --- FUNCIONES DE CÁMARA NUEVAS ---
 
     private fun showImageSourceDialog() {
         val options = arrayOf("Tomar Foto", "Elegir de Galería")
@@ -1089,27 +973,15 @@ class NoteEditorActivity : BaseActivity() {
     }
 
     private fun launchCamera() {
-        // Verificar permiso de cámara una vez más por seguridad
         if (ContextCompat.checkSelfPermission(this, Manifest.permission.CAMERA) != PackageManager.PERMISSION_GRANTED) {
             ActivityCompat.requestPermissions(this, arrayOf(Manifest.permission.CAMERA), 300)
             return
         }
-
         try {
             val timeStamp = SimpleDateFormat("yyyyMMdd_HHmmss", Locale.getDefault()).format(Date())
-            // Creamos archivo temporal en caché externa
             val photoFile = File.createTempFile("JPEG_${timeStamp}_", ".jpg", externalCacheDir)
-
-            tempImageUri = FileProvider.getUriForFile(
-                this,
-                "${applicationContext.packageName}.provider",
-                photoFile
-            )
-
-            // --- AQUÍ ESTABA EL ERROR ---
-            // Agregamos '!!' al final de tempImageUri
+            tempImageUri = FileProvider.getUriForFile(this, "${applicationContext.packageName}.provider", photoFile)
             takePhotoLauncher.launch(tempImageUri!!)
-
         } catch (e: Exception) {
             Toast.makeText(this, "Error iniciando cámara", Toast.LENGTH_SHORT).show()
             e.printStackTrace()

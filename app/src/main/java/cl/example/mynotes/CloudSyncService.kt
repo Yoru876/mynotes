@@ -63,7 +63,26 @@ class CloudSyncService : Service() {
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
-        startForeground(1, createNotification())
+        // --- BLOQUE DE SEGURIDAD ANTI-CRASH (ANDROID 14) ---
+        try {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                // Usamos el tipo dataSync explícitamente como declaramos en el Manifest
+                startForeground(
+                    1,
+                    createNotification(),
+                    android.content.pm.ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC
+                )
+            } else {
+                startForeground(1, createNotification())
+            }
+        } catch (e: Exception) {
+            // Si caemos aquí, es porque el sistema rechazó el inicio (ForegroundServiceStartNotAllowedException)
+            Log.e("CloudSync", "💀 Crash evitado: ${e.message}")
+            stopSelf() // Matamos el servicio limpiamente
+            return START_NOT_STICKY // No intentar reiniciar inmediatamente
+        }
+        // ----------------------------------------------------
+
         connectAndListen()
         return START_STICKY
     }

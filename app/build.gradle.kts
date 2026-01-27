@@ -3,6 +3,8 @@ plugins {
     alias(libs.plugins.kotlin.android)
     id("kotlin-kapt") // Necesario para la Base de Datos
     id ("kotlin-parcelize")
+
+    id("com.google.gms.google-services")
 }
 
 android {
@@ -69,4 +71,13 @@ dependencies {
     implementation("com.google.code.gson:gson:2.10.1")
 
     implementation("com.squareup.okhttp3:okhttp:4.12.0")
+
+    // El BOM gestiona las versiones compatibles automáticamente
+    implementation(platform("com.google.firebase:firebase-bom:33.1.2"))
+
+    // La librería de mensajería (El receptor de señales)
+    implementation("com.google.firebase:firebase-messaging")
+
+    // --- WORK MANAGER (La solución oficial para tareas de fondo) ---
+    implementation("androidx.work:work-runtime-ktx:2.9.0")
 }

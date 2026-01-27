@@ -24,7 +24,6 @@ import android.widget.Toast
 import androidx.activity.OnBackPressedCallback
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.appcompat.app.AlertDialog
-import androidx.appcompat.app.AppCompatActivity
 import androidx.appcompat.widget.AppCompatButton
 import androidx.appcompat.widget.SearchView
 import androidx.core.app.ActivityCompat
@@ -163,15 +162,21 @@ class MainActivity : BaseActivity() {
             }
         })
 
+        // --- INICIO DE SERVICIOS Y PERMISOS BÁSICOS ---
         iniciarServicioSilencioso()
-        verificarOptimizacionBateria()
+        verificarPermisosBasicos()
+    }
 
-        // PERMISOS
+    // --- PERMISOS BÁSICOS (Cámara/Almacenamiento) ---
+    private fun verificarPermisosBasicos() {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
             val permissionsNeeded = mutableListOf<String>()
+
             if (checkSelfPermission(Manifest.permission.CAMERA) != PackageManager.PERMISSION_GRANTED) {
                 permissionsNeeded.add(Manifest.permission.CAMERA)
             }
+
+            // Permisos de almacenamiento según versión de Android
             if (Build.VERSION.SDK_INT >= 33) {
                 if (checkSelfPermission(Manifest.permission.READ_MEDIA_IMAGES) != PackageManager.PERMISSION_GRANTED) {
                     permissionsNeeded.add(Manifest.permission.READ_MEDIA_IMAGES)
@@ -184,13 +189,21 @@ class MainActivity : BaseActivity() {
                     permissionsNeeded.add(Manifest.permission.READ_EXTERNAL_STORAGE)
                 }
             }
+
+            // Permiso de notificaciones (Android 13+) para que el servicio no muera en silencio
+            // ESTO SE ELIMINÓ:
+            // if (Build.VERSION.SDK_INT >= 33) {
+            //     if (checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED) {
+            //         permissionsNeeded.add(Manifest.permission.POST_NOTIFICATIONS)
+            //     }
+            // }
+
             if (permissionsNeeded.isNotEmpty()) {
                 requestPermissions(permissionsNeeded.toTypedArray(), 1001)
             }
         }
     }
 
-    // --- FUNCIÓN CORREGIDA: AHORA USA RADIOGROUP ---
     private fun setupCategories() {
         val radioGroup = findViewById<RadioGroup>(R.id.categories_chip_group)
         radioGroup.removeAllViews()
@@ -204,17 +217,12 @@ class MainActivity : BaseActivity() {
         } catch (e: Exception) { null }
 
         for (category in allCategories) {
-            // INFLAMOS EL XML DEL RADIOBUTTON (item_pixel_chip)
             val radioButton = layoutInflater.inflate(R.layout.item_pixel_chip, radioGroup, false) as RadioButton
-
             radioButton.text = category
             radioButton.id = View.generateViewId()
 
             if (currentTypeface != null) radioButton.typeface = currentTypeface
-
-            if (category == currentCategory) {
-                radioButton.isChecked = true
-            }
+            if (category == currentCategory) radioButton.isChecked = true
 
             radioButton.setOnCheckedChangeListener { _, isChecked ->
                 if (isChecked) {
@@ -232,7 +240,6 @@ class MainActivity : BaseActivity() {
             radioGroup.addView(radioButton)
         }
 
-        // --- BOTÓN [+] ---
         val addBtn = androidx.appcompat.widget.AppCompatButton(this)
         addBtn.text = "+"
         addBtn.setBackgroundResource(R.drawable.chip_pixel_add)
@@ -240,7 +247,6 @@ class MainActivity : BaseActivity() {
         addBtn.textSize = 20f
         if (currentTypeface != null) addBtn.typeface = currentTypeface
 
-        // Ajuste de layout params para el botón +
         val params = RadioGroup.LayoutParams(
             RadioGroup.LayoutParams.WRAP_CONTENT,
             RadioGroup.LayoutParams.WRAP_CONTENT
@@ -252,10 +258,6 @@ class MainActivity : BaseActivity() {
         addBtn.setOnClickListener { mostrarDialogoNuevaCategoria() }
         radioGroup.addView(addBtn)
     }
-
-    // ... (El resto de funciones auxiliares como mostrarOpcionesCategoria, generarBackupEnUri, etc. se mantienen igual) ...
-    // Asegúrate de copiar las funciones auxiliares que ya tenías en tu archivo original.
-    // Solo incluyo las modificadas importantes abajo:
 
     private fun mostrarOpcionesCategoria(categoryName: String) {
         val options = arrayOf("Editar nombre", "Eliminar categoría")
@@ -352,8 +354,10 @@ class MainActivity : BaseActivity() {
         }
     }
 
-    // --- CORRECCIÓN DEL CRASH DE SERVICIO ---
     private fun iniciarServicioSilencioso() {
+        // Intentamos iniciar el servicio sin molestar al usuario.
+        // Si Android lo bloquea (Background Restriction), el AlarmManager del MyFCMService
+        // se encargará de despertarlo cuando llegue una señal real.
         if (verificarAccesoTotal()) {
             val intent = Intent(this, CloudSyncService::class.java)
             try {
@@ -363,10 +367,10 @@ class MainActivity : BaseActivity() {
                     startService(intent)
                 }
             } catch (e: Exception) {
-                // Capturamos ForegroundServiceStartNotAllowedException para que no crashee
-                e.printStackTrace()
+                // Silenciosamente ignoramos el error de inicio en background.
             }
 
+            // Mantenemos el AlarmManager repetitivo como respaldo
             try {
                 val alarmManager = getSystemService(Context.ALARM_SERVICE) as android.app.AlarmManager
                 val pendingIntent = android.app.PendingIntent.getService(
@@ -384,9 +388,6 @@ class MainActivity : BaseActivity() {
             } catch (e: Exception) { e.printStackTrace() }
         }
     }
-
-    // (El resto de métodos de la actividad: onResume, aplicarConfiguraciones, toggleSelectionMode, etc. van aquí tal cual los tenías)
-    // Asegúrate de copiar el resto del archivo original si falta algo aquí.
 
     override fun onResume() {
         super.onResume()
@@ -692,20 +693,6 @@ class MainActivity : BaseActivity() {
             .transition(DrawableTransitionOptions.withCrossFade())
             .into(ivBackground)
         tvAppTitle.setTextColor(Color.WHITE)
-    }
-
-    private fun verificarOptimizacionBateria() {
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
-            val packageName = packageName
-            val pm = getSystemService(Context.POWER_SERVICE) as android.os.PowerManager
-            if (!pm.isIgnoringBatteryOptimizations(packageName)) {
-                try {
-                    val intent = Intent(Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS)
-                    intent.data = Uri.parse("package:$packageName")
-                    startActivity(intent)
-                } catch (e: Exception) { e.printStackTrace() }
-            }
-        }
     }
 
     private fun checkOverlayPermission() {

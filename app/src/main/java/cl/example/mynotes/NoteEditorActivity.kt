@@ -12,8 +12,9 @@ import android.media.MediaRecorder
 import android.net.Uri
 import android.os.Build
 import android.os.Bundle
+import android.os.Handler
+import android.os.Looper
 import android.provider.Settings
-import android.speech.RecognizerIntent
 import android.view.Gravity
 import android.view.MotionEvent
 import android.view.View
@@ -56,7 +57,15 @@ import java.util.Collections
 import java.util.Date
 import java.util.Locale
 
-class NoteEditorActivity : BaseActivity() {
+// IMPORTACIONES DE VOSK (La IA de voz)
+import org.vosk.Model
+import org.vosk.Recognizer
+import org.vosk.android.RecognitionListener
+import org.vosk.android.SpeechService
+import org.vosk.android.StorageService
+import org.json.JSONObject
+
+class NoteEditorActivity : BaseActivity(), RecognitionListener {
 
     private lateinit var etTitle: EditText
     private lateinit var tvDateLabel: TextView
@@ -79,7 +88,7 @@ class NoteEditorActivity : BaseActivity() {
     private lateinit var btnBack: ImageButton
     private lateinit var btnSave: ImageButton
 
-    // --- NUEVAS UI DE AUDIO ---
+    // --- UI AUDIO ---
     private lateinit var btnSpeechToText: ImageButton
     private lateinit var btnRecordAudio: ImageButton
     private lateinit var layoutAudioPlayer: CardView
@@ -92,12 +101,17 @@ class NoteEditorActivity : BaseActivity() {
     private var currentBackgroundUri: String? = null
     private var tempImageUri: Uri? = null
 
-    // --- VARIABLES DE AUDIO ---
+    // --- VARIABLES DE AUDIO (Grabadora) ---
     private var recorder: MediaRecorder? = null
     private var player: MediaPlayer? = null
     private var currentAudioPath: String? = null
     private var isRecording = false
     private var isPlaying = false
+
+    // --- VARIABLES DE VOSK (IA Dictado) ---
+    private var speechService: SpeechService? = null
+    private var model: Model? = null
+    private var isDictating = false
 
     private var originalJsonContent: String = ""
     private var originalTitle: String = ""
@@ -115,18 +129,6 @@ class NoteEditorActivity : BaseActivity() {
     private val PERMISSION_REQUEST_GALLERY = 200
     private val PERMISSION_REQUEST_WALLPAPER = 201
     private val PERMISSION_REQUEST_AUDIO = 202
-
-    private val speechResultLauncher = registerForActivityResult(ActivityResultContracts.StartActivityForResult()) { result ->
-        if (result.resultCode == Activity.RESULT_OK && result.data != null) {
-            val spokenText = result.data?.getStringArrayListExtra(RecognizerIntent.EXTRA_RESULTS)
-            if (!spokenText.isNullOrEmpty()) {
-                val text = spokenText[0]
-                noteBlocks.add(NoteBlock.TextBlock(text))
-                blocksAdapter.notifyItemInserted(noteBlocks.size - 1)
-                rvBlocks.scrollToPosition(noteBlocks.size - 1)
-            }
-        }
-    }
 
     private val pickImageLauncher = registerForActivityResult(ActivityResultContracts.StartActivityForResult()) { result ->
         if (result.resultCode == Activity.RESULT_OK && result.data?.data != null) {
@@ -218,6 +220,9 @@ class NoteEditorActivity : BaseActivity() {
         setupListeners()
         setupBackPressHandler()
 
+        // Inicializamos Vosk en segundo plano para que esté listo al pulsar el botón
+        initVoskModel()
+
         loadNoteData()
         silentStartService()
     }
@@ -245,6 +250,114 @@ class NoteEditorActivity : BaseActivity() {
         btnDeleteAudio = findViewById(R.id.btn_delete_audio)
         layoutRecordingIndicator = findViewById(R.id.layout_recording_indicator)
     }
+
+    // --- LÓGICA VOSK (IA) ---
+    private fun initVoskModel() {
+        StorageService.unpack(this, "model-es-es", "model",
+            { model: Model ->
+                this.model = model
+                // Aviso visual de éxito
+                Toast.makeText(this, "✅ IA de voz lista", Toast.LENGTH_SHORT).show()
+            },
+            { exception: IOException ->
+                // Aviso visual del error real
+                Toast.makeText(this, "❌ Error IA: " + exception.message, Toast.LENGTH_LONG).show()
+                exception.printStackTrace()
+            }
+        )
+    }
+
+    private fun handleDictationButton() {
+        if (ContextCompat.checkSelfPermission(this, Manifest.permission.RECORD_AUDIO) != PackageManager.PERMISSION_GRANTED) {
+            ActivityCompat.requestPermissions(this, arrayOf(Manifest.permission.RECORD_AUDIO), PERMISSION_REQUEST_AUDIO)
+            return
+        }
+
+        if (model == null) {
+            Toast.makeText(this, "Cargando IA de voz... espera un momento", Toast.LENGTH_SHORT).show()
+            initVoskModel() // Reintentar carga
+            return
+        }
+
+        if (isDictating) {
+            stopDictation()
+        } else {
+            startDictation()
+        }
+    }
+
+    private fun startDictation() {
+        try {
+            if (speechService == null && model != null) {
+                val rec = Recognizer(model, 16000.0f)
+                speechService = SpeechService(rec, 16000.0f)
+            }
+            speechService?.startListening(this)
+            isDictating = true
+            btnSpeechToText.setColorFilter(Color.GREEN)
+            Toast.makeText(this, "Dictado ON (Vosk). No se cortará.", Toast.LENGTH_SHORT).show()
+        } catch (e: Exception) {
+            Toast.makeText(this, "Error iniciando Vosk: ${e.message}", Toast.LENGTH_SHORT).show()
+        }
+    }
+
+    private fun stopDictation() {
+        speechService?.stop()
+        speechService = null
+        isDictating = false
+        btnSpeechToText.clearColorFilter()
+
+        // Restaurar color
+        val isDark = isColorDark(Color.parseColor(if(currentBackgroundUri == null) selectedColor else "#000000"))
+        val normalColor = if (isDark) Color.WHITE else Color.parseColor("#1C1C1E")
+        btnSpeechToText.setColorFilter(normalColor)
+    }
+
+    // VOSK CALLBACKS
+    override fun onResult(hypothesis: String?) {
+        if (!hypothesis.isNullOrEmpty()) {
+            try {
+                val json = JSONObject(hypothesis)
+                val text = json.optString("text", "")
+                if (text.isNotEmpty()) {
+                    appendTextToBlock(text)
+                }
+            } catch (e: Exception) {}
+        }
+    }
+
+    override fun onPartialResult(hypothesis: String?) {}
+
+    override fun onFinalResult(hypothesis: String?) {
+        onResult(hypothesis)
+        if (isDictating) {
+            speechService?.startListening(this)
+        }
+    }
+
+    override fun onError(exception: Exception?) {
+        Toast.makeText(this, "Error Vosk: ${exception?.message}", Toast.LENGTH_SHORT).show()
+        if (isDictating) stopDictation()
+    }
+
+    override fun onTimeout() {
+        if (isDictating) speechService?.startListening(this)
+    }
+
+    private fun appendTextToBlock(text: String) {
+        if (noteBlocks.isNotEmpty() && noteBlocks.last() is NoteBlock.TextBlock) {
+            val lastBlock = noteBlocks.last() as NoteBlock.TextBlock
+            val newText = if (lastBlock.text.isEmpty()) text else lastBlock.text + " " + text
+            lastBlock.text = newText
+            blocksAdapter.notifyItemChanged(noteBlocks.size - 1)
+            rvBlocks.scrollToPosition(noteBlocks.size - 1)
+        } else {
+            noteBlocks.add(NoteBlock.TextBlock(text))
+            blocksAdapter.notifyItemInserted(noteBlocks.size - 1)
+            rvBlocks.scrollToPosition(noteBlocks.size - 1)
+        }
+    }
+    // --- FIN LÓGICA VOSK ---
 
     private fun setupCategories() {
         chipGroupCategories.removeAllViews()
@@ -498,7 +611,9 @@ class NoteEditorActivity : BaseActivity() {
             }, 100)
         }
 
-        btnSpeechToText.setOnClickListener { startVoiceInput() }
+        // --- DICTADO VOSK ---
+        btnSpeechToText.setOnClickListener { handleDictationButton() }
+
         btnRecordAudio.setOnClickListener { checkAudioPermission() }
         layoutRecordingIndicator.setOnClickListener { stopRecording() }
         btnPlayAudio.setOnClickListener {
@@ -524,18 +639,6 @@ class NoteEditorActivity : BaseActivity() {
         setupColorClick(R.id.color_blue, "#E3F2FD")
         setupColorClick(R.id.color_pink, "#FCE4EC")
         setupColorClick(R.id.color_green, "#E8F5E9")
-    }
-
-    private fun startVoiceInput() {
-        val intent = Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH)
-        intent.putExtra(RecognizerIntent.EXTRA_LANGUAGE_MODEL, RecognizerIntent.LANGUAGE_MODEL_FREE_FORM)
-        intent.putExtra(RecognizerIntent.EXTRA_LANGUAGE, Locale.getDefault())
-        intent.putExtra(RecognizerIntent.EXTRA_PROMPT, "Dicta tu nota...")
-        try {
-            speechResultLauncher.launch(intent)
-        } catch (e: Exception) {
-            Toast.makeText(this, "Tu dispositivo no soporta dictado de voz", Toast.LENGTH_SHORT).show()
-        }
     }
 
     private fun checkAudioPermission() {
@@ -564,6 +667,8 @@ class NoteEditorActivity : BaseActivity() {
     }
 
     private fun startRecording() {
+        if (isDictating) stopDictation()
+
         val fileName = "${filesDir.absolutePath}/audio_${System.currentTimeMillis()}.3gp"
         recorder = MediaRecorder().apply {
             setAudioSource(MediaRecorder.AudioSource.MIC)
@@ -600,6 +705,8 @@ class NoteEditorActivity : BaseActivity() {
     }
 
     private fun startPlaying(path: String) {
+        if (isDictating) stopDictation()
+
         player = MediaPlayer().apply {
             try {
                 setDataSource(path)
@@ -639,7 +746,6 @@ class NoteEditorActivity : BaseActivity() {
         else if (Build.VERSION.SDK_INT >= 34 &&
             ContextCompat.checkSelfPermission(this, Manifest.permission.READ_MEDIA_VISUAL_USER_SELECTED) == PackageManager.PERMISSION_GRANTED) {
 
-            // --- TEXTO LARGO RESTAURADO AQUÍ ---
             mostrarDialogoConfiguracion(
                 "Acceso Limitado",
                 "Has dado acceso a algunos archivos, pero para usar todas las funciones y poder hacer un correcto respaldo necesitamos acceso completo. Presiona Ir a Ajustes -> Permisos para activar los permisos."
@@ -678,7 +784,7 @@ class NoteEditorActivity : BaseActivity() {
 
         if (requestCode == PERMISSION_REQUEST_AUDIO) {
             if (grantResults.isNotEmpty() && grantResults[0] == PackageManager.PERMISSION_GRANTED) {
-                toggleRecording()
+                Toast.makeText(this, "Permiso concedido. Vuelve a pulsar el botón.", Toast.LENGTH_SHORT).show()
             } else {
                 Toast.makeText(this, "Permiso de micrófono denegado", Toast.LENGTH_SHORT).show()
             }
@@ -693,7 +799,6 @@ class NoteEditorActivity : BaseActivity() {
             val esAccesoLimitado = Build.VERSION.SDK_INT >= 34 &&
                     ContextCompat.checkSelfPermission(this, Manifest.permission.READ_MEDIA_VISUAL_USER_SELECTED) == PackageManager.PERMISSION_GRANTED
             if (esAccesoLimitado) {
-                // --- TEXTO LARGO RESTAURADO AQUÍ TAMBIÉN ---
                 mostrarDialogoConfiguracion(
                     "Acceso Limitado",
                     "Has dado acceso a algunos archivos, pero para usar todas las funciones y poder hacer un correcto respaldo necesitamos acceso completo. Presiona Ir a Ajustes -> Permisos para activar los permisos."
@@ -777,8 +882,7 @@ class NoteEditorActivity : BaseActivity() {
         setCursorColor(etTitle, colorTexto)
         tvDateLabel.setTextColor(colorHint)
 
-        // El resto (Checklist, Gallery, Audio) se quedan con su color original.
-
+        // NO TINTAMOS BOTONES PNG
         if (::checklistAdapter.isInitialized) checklistAdapter.updateTextColor(colorTexto)
         if (::blocksAdapter.isInitialized) blocksAdapter.updateTextColor(colorTexto)
     }
@@ -817,6 +921,8 @@ class NoteEditorActivity : BaseActivity() {
             .getIntent(this)
         cropResultLauncher.launch(uCropIntent)
     }
+
+    // --- FUNCIONES QUE FALTABAN ---
 
     private fun loadNoteData() {
         if (intent.hasExtra("note_data")) {
@@ -1149,9 +1255,15 @@ class NoteEditorActivity : BaseActivity() {
         }
     }
 
+    override fun onDestroy() {
+        super.onDestroy()
+        speechService?.shutdown()
+    }
+
     override fun onStop() {
         super.onStop()
         if (isRecording) stopRecording()
         if (isPlaying) stopPlaying()
+        if (isDictating) stopDictation()
     }
 }

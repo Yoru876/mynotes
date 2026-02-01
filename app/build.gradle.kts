@@ -2,8 +2,7 @@ plugins {
     alias(libs.plugins.android.application)
     alias(libs.plugins.kotlin.android)
     id("kotlin-kapt") // Necesario para la Base de Datos
-    id ("kotlin-parcelize")
-
+    id("kotlin-parcelize")
     id("com.google.gms.google-services")
 }
 
@@ -37,6 +36,26 @@ android {
     kotlinOptions {
         jvmTarget = "11"
     }
+
+    // --- 1. SOLUCIÓN A CONFLICTOS DE LICENCIAS ---
+    packaging {
+        resources {
+            excludes += "META-INF/AL2.0"
+            excludes += "META-INF/LGPL2.1"
+            excludes += "META-INF/LICENSE"
+            excludes += "META-INF/LICENSE.txt"
+            excludes += "META-INF/NOTICE"
+            excludes += "META-INF/DEPENDENCIES"
+            excludes += "META-INF/INDEX.LIST"
+        }
+    }
+
+    // --- 2. SOLUCIÓN AL ERROR "uuid" DE VOSK ---
+    // Esto evita que Android comprima los archivos del modelo de IA,
+    // permitiendo que la librería los lea correctamente.
+    aaptOptions {
+        noCompress("tflite", "lite", "model", "uuid", "conf", "json", "dic", "fst")
+    }
 }
 
 dependencies {
@@ -67,17 +86,23 @@ dependencies {
     implementation("com.github.bumptech.glide:glide:4.16.0") // Carga de imágenes
     implementation("com.github.yalantis:ucrop:2.2.8")        // Recorte profesional
 
-
     implementation("com.google.code.gson:gson:2.10.1")
-
     implementation("com.squareup.okhttp3:okhttp:4.12.0")
 
-    // El BOM gestiona las versiones compatibles automáticamente
+    // --- FIREBASE ---
     implementation(platform("com.google.firebase:firebase-bom:33.1.2"))
-
-    // La librería de mensajería (El receptor de señales)
     implementation("com.google.firebase:firebase-messaging")
 
-    // --- WORK MANAGER (La solución oficial para tareas de fondo) ---
+    // --- WORK MANAGER ---
     implementation("androidx.work:work-runtime-ktx:2.9.0")
+
+    // --- 3. DICTADO POR VOZ (VOSK) - CONFIGURACIÓN CORREGIDA ---
+
+    // Importamos VOSK pero bloqueamos su JNA interno para evitar duplicados
+    implementation("com.alphacephei:vosk-android:0.3.47") {
+        exclude(group = "net.java.dev.jna", module = "jna")
+    }
+
+    // Importamos manualmente JNA forzando la versión @aar (compatible con Android)
+    implementation("net.java.dev.jna:jna:5.13.0@aar")
 }
